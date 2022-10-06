@@ -107,10 +107,10 @@ def train(H, vqgan, vqgan_ema, train_loader, test_loader, optim, d_optim, start_
             
             ## Plot recons
             if global_step % H.train.plot_recon_steps == 0 and global_step > 0:
-                wandb_dict |= plot_images(H, x.mean(dim=3), title='x mean(dim=3)', vis=vis)
-                wandb_dict |= plot_images(H, x.mean(dim=4), title='x mean(dim=4)', vis=vis)
-                wandb_dict |= plot_images(H, x_hat.mean(dim=3), title='x_recon mean(dim=3)', vis=vis)
-                wandb_dict |= plot_images(H, x_hat.mean(dim=4), title='x_recon mean(dim=4)', vis=vis)
+                wandb_dict |= plot_images(H, x.max(dim=3)[0], title='x max(dim=3)', vis=vis)
+                wandb_dict |= plot_images(H, x.max(dim=4)[0], title='x max(dim=4)', vis=vis)
+                wandb_dict |= plot_images(H, x_hat.max(dim=3)[0], title='x_recon max(dim=3)', vis=vis)
+                wandb_dict |= plot_images(H, x_hat.max(dim=4)[0], title='x_recon max(dim=4)', vis=vis)
             
             ## Evaluate on test set
             if global_step % H.train.eval_steps == 0 and global_step > 0:
@@ -120,10 +120,10 @@ def train(H, vqgan, vqgan_ema, train_loader, test_loader, optim, d_optim, start_
                         test_x_hat, test_stats = vqgan.val_iter(test_x, global_step)
                     track_variables(test_tracked_stats, test_stats)
                 wandb_dict |= log_stats(H, global_step, test_tracked_stats, test=True, log_to_file=H.run.log_to_file)
-                wandb_dict |= plot_images(H, test_x.mean(dim=3), title='test_x mean(dim=3)', vis=vis)
-                wandb_dict |= plot_images(H, test_x.mean(dim=4), title='test_x mean(dim=4)', vis=vis)
-                wandb_dict |= plot_images(H, test_x_hat.mean(dim=3), title='test_x_hat mean(dim=3)', vis=vis)
-                wandb_dict |= plot_images(H, test_x_hat.mean(dim=4), title='test_x_hat mean(dim=4)', vis=vis)
+                wandb_dict |= plot_images(H, test_x.max(dim=3)[0], title='test_x max(dim=3)', vis=vis)
+                wandb_dict |= plot_images(H, test_x.max(dim=4)[0], title='test_x max(dim=4)', vis=vis)
+                wandb_dict |= plot_images(H, test_x_hat.max(dim=3)[0], title='test_x_hat max(dim=3)', vis=vis)
+                wandb_dict |= plot_images(H, test_x_hat.max(dim=4)[0], title='test_x_hat max(dim=4)', vis=vis)
             
             ## Plot everything to wandb
             if wandb_dict:
@@ -174,7 +174,7 @@ def main(argv):
 
     start_step = 0
     if H.train.load_step > 0:
-        start_step = H.train.load_step + 1  # don't repeat the checkpointed step
+        start_step = H.train.load_step - 1  # don't repeat the checkpointed step
         vqgan, optim, d_optim, vqgan_ema = load_vqgan_from_checkpoint(H, vqgan, optim, d_optim, vqgan_ema)
 
     train(H, vqgan, vqgan_ema, train_loader, test_loader, optim, d_optim, start_step, **train_kwargs)

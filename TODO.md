@@ -33,3 +33,4 @@ TODO
 - [ ] Try conditioning transformer on time again now everything else is optimised.
 - [ ] Train VQGANs with L2 loss instead of L1 to penalise deviation from the data more? (would need rescaling since squaring would make values smaller)
 - [ ] Change the latent saving function to save x-ray latents as long values instead of full flaot vectors to save storage space. Relatively minor since the datasets are small though.
+- [ ] Sample with fewer diffusion steps. The strong conditioning signal should mean we can skip quite a lot of steps at once.

@@ -53,8 +53,9 @@ def log_stats(H, step, stats, test=False, log_to_file=False):
     return print_stats
 
 def plot_images(H, x, title='', norm=True, vis=None):
-    x = (x + 1) / 2 if norm else x
+    # x = (x + 1) / 2 if norm else x
     x = torch.clamp(x, 0, 1)
+    # x = (x - x.min()) / (x.max() - x.min())
 
     # visdom
     if H.run.enable_visdom and vis is not None:
