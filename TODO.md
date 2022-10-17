@@ -6,12 +6,14 @@ TODO
 - [ ] Think about how best to store CT scans. 273mb * batch size 16 = 4.4gb. So looking at least 4gb/s read speeds, realistically more like >8gb/s, which is insane. Can zip compress as .npz which drops it by 4x. Could maybe preprocess to max side length 256 which might get another factor of 8.
     - [x] For now I have interpolated them all down by a factor of 2 i.e. '''F.interpolate(x_torch.unsqueeze(0).unsqueeze(0), scale_factor=0.5, mode="trilinear")''' and zip compressed as .npz which has reduced the sizes down by a factor ~20x.
     - [ ] Save as video files and load with NVIDIA Dali?
+            Currently NVIDIA Dali process 3D data by using gpu direct storage. I tried loading and perfoming preprocessing steps using CuPy as we can apply the preprocessing steps in gpu. This seems to achieve an increase of ~5% gpu usage increase. Might be worth using a cache subset of the data as MONAI does.
 - [ ] Play around with the sizes of CT latents. Currently 8x16x16=2048 which is quite large. But 8x8x8=512 is quite small. Maybe 16x8x8 could be better?
 - [ ] For 3D VQGAN maybe try the architecture used for video diffusion models with 2D convolutions and 1D (flash) attention down the other dimension?
 - [ ] Inspired by the video diffusion models above, could break convolutions into three 2D convolutions per block. Probably 3 sets. For the 3 spatial dims (1,2,3) can move one dim into batch and do convolutions on (1,2), (1,3), (2,3). 
 - [ ] Add dropout to help generalisation
 - [ ] Add option for AdamW
-- [ ] Try augmenting images before passing to autoencoder. Might help with generalisation
+- [x] Try augmenting images before passing to autoencoder. Might help with generalisation. 
+        Used [kornia](https://github.com/kornia/kornia) as it has differentiable transformations. I added geometric X-ray and CT augmentations. This helped a lot in the knee dataset as training was failing in the X-ray case. 
 - [ ] If VQGAN trained with augmentations as above then try training latent model with distribution augmentation (i.e. condition latent model on the augmentation type/weight).
 - [ ] Change all rearranging operations to einops
 - [ ] Use flash attention for VQGAN attention. Might be especially helpful for 3D VQGAN
