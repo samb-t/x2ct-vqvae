@@ -3,8 +3,12 @@ import glob
 import torch
 import torch.nn as nn
 import numpy as np
+import cupy as cp
 import torchvision
+from random import random
 from PIL import Image
+from torch import nn
+from torchvision import transforms
 from torch.utils.data import Dataset
 from utils.transforms import *
 
@@ -15,8 +19,9 @@ class XCT_dataset(Dataset):
     and paired Digitaly Reconstructed Radiographs
     (DRR) images
     """
-    def __init__(self, data_dir, train, xray_scale=256, ct_scale=128, projections=2,
-                 ct_min=0, ct_max=2000, scale_ct=True, load_res=None):
+    def __init__(self, data_dir, train, dataset='chest', xray_scale=256, ct_scale=128, projections=2,
+                 ct_min=0, ct_max=2000, scale_ct=True, load_res=None, cupy=True, aug_prob=0.2,
+                 use_synthetic=True):
         """
         :param data_dir: (str) path to folder containing all ct scans
 
@@ -41,47 +46,53 @@ class XCT_dataset(Dataset):
         'ct': ct volume torch.Tensor(scale, scale, scale)
         'dir_name': full path to that ct scan (str)
         """
-        split_file = 'data/train_split.txt' if train else 'data/test_split.txt'
+        assert os.path.exists(data_dir), f"Error: {data_dir} not found!"
+        self.dataset = dataset
+        self.ext = '*jpeg' if use_synthetic and dataset=='knee' else '*.png'
+        split_file = f'data/{self.dataset}_train_split.txt' if train else f'data/{self.dataset}_test_split.txt'
         self.projections = projections
         self.data_dir = data_dir
         self.ct_min = ct_min
+        self.cupy = cupy
         self.load_res = load_res
 
         if projections == 2:
-            self.view_list = [0,2]
+            self.view_list = ([0,2])
         elif projections == 3:
-            self.view_list = [0,1,2]
+            self.view_list = ([0,1,2])
         elif projections == 4:
-            self.view_list = [0,2,4,6]
+            self.view_list = ([0,2,4,6])
         else:
-            self.view_list = [0,1,2,3,4,5,6,7]
+            self.view_list = ([0,1,2,3,4,5,6,7])
+        if dataset == 'knee' and not use_synthetic:
+            self.view_list = [0, 1]
 
         self.split_list = self._get_split(split_file)
         self.object_dirs = self._get_dirs()
         
         self.xray_tx = [torchvision.transforms.Resize(xray_scale),
                         Normalization(0, 255),
-                        # Removed gaussian normalization since with 0, 1 it's the identity 
-                        # Normalization_gaussian(0., 1),
                         ToTensor()]
-
-        self.ct_tx = [Resize_image((ct_scale, ct_scale, ct_scale)) if scale_ct else nn.Identity(),
-                      Limit_Min_Max_Threshold(ct_min, ct_max),
-                      Normalization(ct_min, ct_max), 
-                      # Removed gaussian normalization since with 0, 1 it's the identity 
-                      # Normalization_gaussian(0., 1.),
-                      ToTensor()]
+        if cupy:
+            self.ct_tx = [CPResize_image((ct_scale, ct_scale, ct_scale)),
+                          Limit_Min_Max_Threshold(ct_min, ct_max),
+                          CPNormalization(ct_min, ct_max),
+                          CPToTensor()]
+        else:
+            self.ct_tx = [Resize_image((ct_scale, ct_scale, ct_scale)) if scale_ct else nn.Identity(),
+                          Limit_Min_Max_Threshold(ct_min, ct_max),
+                          Normalization(ct_min, ct_max), 
+                          ToTensor()]
 
     def __len__(self):
         return len(self.object_dirs)
 
     def __getitem__(self, idx):
         object_dir = self.object_dirs[idx]
-        
-        xray_files = sorted(glob.glob(f'{object_dir}/*.png'))
+        xray_files = sorted(glob.glob(os.path.join(object_dir, self.ext)))
         xrays_list = []
         for i in self.view_list:
-            xray = Image.open(xray_files[i])
+            xray = Image.open(xray_files[i]).convert('L')
             for transf in self.xray_tx:
                 xray = transf(xray)
             xrays_list.append(xray)
@@ -90,11 +101,10 @@ class XCT_dataset(Dataset):
         if self.load_res is not None:
             ct_path = f'{object_dir}/*_{self.load_res}.npz'
             ct_file = glob.glob(ct_path)
-            ct_scan = torch.from_numpy(np.load(ct_file[0])["ct"]).squeeze(0)
+            ct_scan = cp.squeeze(cp.load(ct_file[0])["ct"], 0) if self.cupy else torch.from_numpy(np.load(ct_file[0])["ct"]).squeeze(0)
         else:
-            ct_path = f'{object_dir}/*.npy'
-            ct_file = glob.glob(ct_path)
-            ct_scan = torch.from_numpy(np.load(ct_file[0]))
+            ct_file = glob.glob(os.path.join(object_dir, '*.npy'))
+            ct_scan = cp.load(ct_file[0]) if self.cupy else torch.from_numpy(np.load(ct_file[0]))
 
         for transf in self.ct_tx:
             ct_scan = transf(ct_scan)
@@ -110,7 +120,7 @@ class XCT_dataset(Dataset):
         return data
 
     def _get_dirs(self):
-        data_dirs = glob.glob(f"{self.data_dir}/**/*_chest", recursive=True)
+        data_dirs = glob.glob(f"{self.data_dir}/**/*_{self.dataset}", recursive=True)
         dirs = [x for x in data_dirs if os.path.basename(x).split('_')[0] in set(self.split_list)]
         return dirs
 
@@ -120,11 +130,13 @@ class XCT_dataset(Dataset):
             data = [n.rstrip() for n in file]
         return data
 
+
 class XRay_dataset(Dataset):
     """
     Class for loading DRRs
     """
-    def __init__(self, data_dir, train, scale=128, projections=2):
+    def __init__(self, data_dir, train, scale=128, projections=2, dataset='chest', aug_prob=0.,
+                 use_synthetic=False):
         """
         :param data_dir: (str) path to folder containing all ct scans
 
@@ -145,7 +157,10 @@ class XRay_dataset(Dataset):
         'ct': ct volume torch.Tensor(scale, scale, scale)
         'dir_name': full path to that ct scan (str)
         """
-        split_file = 'data/train_split.txt' if train else 'data/test_split.txt'
+        assert os.path.exists(data_dir), f"Error: {data_dir} not found!"
+        self.dataset = dataset
+        self.types = ['*.png', '*jpeg'] if use_synthetic else ['*.png']
+        split_file = f'data/{self.dataset}_train_split.txt' if train else f'data/{self.dataset}_test_split.txt'
         self.projections = projections
         self.data_dir = data_dir
 
@@ -157,15 +172,18 @@ class XRay_dataset(Dataset):
             self.view_list = [0,2,4,6]
         else:
             self.view_list = [0,1,2,3,4,5,6,7]
+        if self.dataset == 'knee':
+            self.view_list = [0, 1]
 
         self.split_list = self._get_split(split_file)
         self.xrays_files = self._get_files()
         
-        
-        self.xray_tx = [torchvision.transforms.Resize(scale),
+        self.xray_tx = [transforms.Resize(scale),
+                        transforms.RandomApply(torch.nn.ModuleList([
+                            transforms.RandomResizedCrop(scale, scale=(0.5, 1.0), ratio=(0.98, 1.02)),
+                            transforms.CenterCrop(scale)]),
+                                               p=aug_prob),
                         Normalization(0, 255),
-                        # Removed gaussian normalization since with 0, 1 it's the identity 
-                        # Normalization_gaussian(0., 1),
                         ToTensor()]
 
     def __len__(self):
@@ -173,7 +191,7 @@ class XRay_dataset(Dataset):
 
     def __getitem__(self, idx):
         xray_file = self.xrays_files[idx]
-        xray = Image.open(xray_file)
+        xray = Image.open(xray_file).convert('L')
         for transf in self.xray_tx:
             xray = transf(xray)
         
@@ -186,15 +204,17 @@ class XRay_dataset(Dataset):
     def _get_files(self):
         dirs = self._get_dirs()
         files = []
+            
         for object_dir in dirs:
-            xray_files = sorted(glob.glob(f'{object_dir}/*.png'))
-            for i in self.view_list:
-                xray = xray_files[i]
-                files.append(xray)
+            for ext in self.types:
+                xray_files = sorted(glob.glob(os.path.join(object_dir, ext)))
+                for i in self.view_list:
+                    xray = xray_files[i]
+                    files.append(xray)
         return files
     
     def _get_dirs(self):
-        data_dirs = glob.glob(f"{self.data_dir}/**/*_chest", recursive=True)
+        data_dirs = glob.glob(f"{self.data_dir}/**/*_{self.dataset}", recursive=True)
         dirs = [x for x in data_dirs if os.path.basename(x).split('_')[0] in set(self.split_list)]
         return dirs
 
@@ -204,12 +224,155 @@ class XRay_dataset(Dataset):
             data = [n.rstrip() for n in file]
         return data
 
+
+class BagXRay_dataset(Dataset):
+    """
+    Class for loading Xray views from ct baggage
+    """
+    def __init__(self,
+                 data_dir,
+                 train,
+                 scale=128,
+                 types='grayscale',
+                 direction='both',
+                 degrees=45,
+    ):
+        """
+        :param data_dir: (str) path to folder containing all ct scans
+        :param train: (bool) are we training or testing.
+        :param scale: (int) resize x-ray images to this value
+        :param types: (str) ['grayscale', 'rgb'] rgb uses the color transfer function of the xray machine, while grayscale the original density values
+        :param direction: (str) ['azimuth', 'elevation', 'both'] camera rotation of xrays
+        :param degrees: (int) [45, 90, 180] difference between neighboring angles
+        """
+
+        self.data_dir = data_dir
+        self.types = types
+        self.direction = direction
+        self.degrees = degrees
+        split_file = 'data/bags_train_split.txt' if train else 'data/bags_test_split.txt'
+        self.split_list = self._get_split(split_file)
+        self.xrays_files = self._get_files()
+        
+        self.xray_tx = [transforms.Resize(scale),
+                        Normalization(0, 255),
+                        ToTensor()]
+
+    def __len__(self):
+        return len(self.xrays_files)
+
+    def __getitem__(self, idx):
+        xray_file = self.xrays_files[idx]
+        xray = Image.open(xray_file)
+        xray = xray.convert('L') if self.types == 'grayscale' else xray.convert('RGB')
+        for transf in self.xray_tx:
+            xray = transf(xray)
+
+        if self.types == 'grayscale':
+            xray = xray.unsqueeze(0)
+        
+        data = {
+            "xray": xray
+        }
+
+        return data
+
+
+    def _get_dirs(self):
+        data_dirs =  [f.path for f in os.scandir(self.data_dir) if f.is_dir()]
+        return [x for x in data_dirs if os.path.basename(x) in set(self.split_list)]
+
+    def _get_files(self):
+        dirs = self._get_dirs()
+        files = []
+        channels = ['rgb', 'grayscale'] if self.types == 'both' else [self.types]
+        camera = ['azimuth', 'elevation'] if self.direction == 'both' else [self.direction]
+
+        for d in dirs:
+            for ch in channels:
+                for cam in camera:
+                    for deg in range(0, 315+1, self.degrees):
+                        file_name = f"projections_{ch}/{os.path.basename(d)}_{cam}_{deg}.png"
+                        files.append(os.path.join(d, file_name))
+
+        return files
+
+    @staticmethod
+    def _get_split(split_file):
+        with open(split_file) as file:
+            data = [n.rstrip() for n in file]
+        return data
+
+
+class BagCT_dataset(Dataset):
+    """
+    Class for loading CT scans
+    """
+    def __init__(self, data_dir, train, load_res=None, scale=256,
+                 ct_min=0, ct_max=2000, scale_ct=True,
+                 cupy=False):
+    
+        assert os.path.exists(data_dir), f"Error: {data_dir} not found!"
+        self.cupy = cupy
+        split_file = 'data/bags_train_split.txt' if train else 'data/bags_test_split.txt'
+        self.data_dir = data_dir
+        self.ct_min = ct_min
+        self.load_res = load_res
+
+        self.split_list = self._get_split(split_file)
+        self.object_dirs = self._get_dirs()
+
+        if cupy:
+            self.ct_tx = [CPResize_image((scale, scale, scale)),
+                          Limit_Min_Max_Threshold(ct_min, ct_max),
+                          CPNormalization(ct_min, ct_max),
+                          CPToTensor()]
+        else:
+            self.ct_tx = [Resize_image((scale, scale, scale)) if scale_ct else nn.Identity(),
+                          Limit_Min_Max_Threshold(ct_min, ct_max),
+                          Normalization(ct_min, ct_max), 
+                          ToTensor()]
+
+
+    def __len__(self):
+        return len(self.object_dirs)
+
+    def __getitem__(self, idx):
+        object_dir = self.object_dirs[idx]
+        ct_path = f'{object_dir}/npz/*.npy'
+        ct_file = glob.glob(ct_path)
+        ct_scan = cp.load(ct_file[0]) if self.cupy else torch.from_numpy(np.load(ct_file[0]))
+
+        for transf in self.ct_tx:
+            ct_scan = transf(ct_scan)
+
+        ct_scan = ct_scan.unsqueeze(0)
+        
+        data = {
+            "ct": ct_scan,
+            "dir_name": object_dir}
+
+        return data
+
+    def _get_dirs(self):
+        data_dirs = os.listdir(self.data_dir)
+        dirs = [os.path.join(self.data_dir, x) for x in data_dirs if x in set(self.split_list)]
+        return dirs
+
+    @staticmethod
+    def _get_split(split_file):
+        with open(split_file) as file:
+            data = [n.rstrip() for n in file]
+        return data
+
+
 class CT_dataset(Dataset):
     """
     Class for loading CT scans
     """
     def __init__(self, data_dir, train, load_res=None, scale=256,
-                 ct_min=0, ct_max=2000, scale_ct=True):
+                 ct_min=0, ct_max=2000, scale_ct=True, dataset='chest',
+                 cupy=False):
         """
         :param data_dir: (str) path to folder containing all ct scans
 
@@ -234,7 +397,10 @@ class CT_dataset(Dataset):
         'ct': ct volume torch.Tensor(scale, scale, scale)
         'dir_name': full path to that ct scan (str)
         """
-        split_file = 'data/train_split.txt' if train else 'data/test_split.txt'
+        assert os.path.exists(data_dir), f"Error: {data_dir} not found!"
+        self.dataset = dataset
+        self.cupy = cupy
+        split_file = f'data/{self.dataset}_train_split.txt' if train else f'data/{self.dataset}_test_split.txt'
         self.data_dir = data_dir
         self.ct_min = ct_min
         self.load_res = load_res
@@ -242,12 +408,17 @@ class CT_dataset(Dataset):
         self.split_list = self._get_split(split_file)
         self.object_dirs = self._get_dirs()
 
-        self.ct_tx = [Resize_image((scale, scale, scale)) if scale_ct else nn.Identity(),
-                      Limit_Min_Max_Threshold(ct_min, ct_max),
-                      Normalization(ct_min, ct_max), 
-                      # Removed gaussian normalization since with 0, 1 it's the identity 
-                      # Normalization_gaussian(0., 1.),
-                      ToTensor()]
+        if cupy:
+            self.ct_tx = [CPResize_image((scale, scale, scale)),
+                          Limit_Min_Max_Threshold(ct_min, ct_max),
+                          CPNormalization(ct_min, ct_max),
+                          CPToTensor()]
+        else:
+            self.ct_tx = [Resize_image((scale, scale, scale)) if scale_ct else nn.Identity(),
+                          Limit_Min_Max_Threshold(ct_min, ct_max),
+                          Normalization(ct_min, ct_max), 
+                          ToTensor()]
+
 
     def __len__(self):
         return len(self.object_dirs)
@@ -258,11 +429,11 @@ class CT_dataset(Dataset):
         if self.load_res is not None:
             ct_path = f'{object_dir}/*_{self.load_res}.npz'
             ct_file = glob.glob(ct_path)
-            ct_scan = torch.from_numpy(np.load(ct_file[0])["ct"]).squeeze(0)
+            ct_scan = cp.squeeze(cp.load(ct_file[0])["ct"], 0) if self.cupy else torch.from_numpy(np.load(ct_file[0])["ct"]).squeeze(0)
         else:
             ct_path = f'{object_dir}/*.npy'
             ct_file = glob.glob(ct_path)
-            ct_scan = torch.from_numpy(np.load(ct_file[0]))
+            ct_scan = cp.load(ct_file[0]) if self.cupy else torch.from_numpy(np.load(ct_file[0]))
 
         for transf in self.ct_tx:
             ct_scan = transf(ct_scan)
@@ -276,7 +447,7 @@ class CT_dataset(Dataset):
         return data
 
     def _get_dirs(self):
-        data_dirs = glob.glob(f"{self.data_dir}/**/*_chest", recursive=True)
+        data_dirs = glob.glob(f"{self.data_dir}/**/*_{self.dataset}", recursive=True)
         dirs = [x for x in data_dirs if os.path.basename(x).split('_')[0] in set(self.split_list)]
         return dirs
 
@@ -285,31 +456,3 @@ class CT_dataset(Dataset):
         with open(split_file) as file:
             data = [n.rstrip() for n in file]
         return data
-
-def get_data(data_dir, train, img_size, num_xrays,
-             ct_min, ct_max):
-    assert os.path.isdir(data_dir)
-        
-    dataset = XCT_dataset(data_dir, train, scale=img_size,
-                          projections=num_xrays,
-                          ct_min=ct_min, ct_max=ct_max)
-
-    return dataset
-
-# Usage example:
-'''
-from torch.utils.data.dataloader import DataLoader
-device = torch.device("cuda:0")
-dataset = get_data(data_dir='/projects/cgw/medical/lidc',
-                  train=True, img_size=128,
-                  num_xrays=2, ct_min=0, ct_max=2000)
-train_loader = DataLoader(dataset,
-                          batch_size=1,
-                          shuffle=True)
-
-data_loader = iter(train_loader)
-data = next(data_loader)
-xrays = data['xrays'].to(device)
-ct = data['ct'].to(device)
-path = data['dir_name']
-'''
