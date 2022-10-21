@@ -74,10 +74,10 @@ class XCT_dataset(Dataset):
                         Normalization(0, 255),
                         ToTensor()]
         if cupy:
-            self.ct_tx = [CPResize_image((ct_scale, ct_scale, ct_scale)),
+            self.ct_tx = [Resize_image((ct_scale, ct_scale, ct_scale), cupy=True),
                           Limit_Min_Max_Threshold(ct_min, ct_max),
-                          CPNormalization(ct_min, ct_max),
-                          CPToTensor()]
+                          Normalization(ct_min, ct_max, cupy=True),
+                          ToTensor(cupy=True)]
         else:
             self.ct_tx = [Resize_image((ct_scale, ct_scale, ct_scale)) if scale_ct else nn.Identity(),
                           Limit_Min_Max_Threshold(ct_min, ct_max),
@@ -307,6 +307,8 @@ class BagXRay_dataset(Dataset):
 class BagCT_dataset(Dataset):
     """
     Class for loading CT scans
+    Note: if using cupy to read into gpu, workers need to be 0
+    and pin_memory=False when creating dataloader
     """
     def __init__(self, data_dir, train, load_res=None, scale=256,
                  ct_min=0, ct_max=2000, scale_ct=True,
@@ -323,14 +325,12 @@ class BagCT_dataset(Dataset):
         self.object_dirs = self._get_dirs()
 
         if cupy:
-            self.ct_tx = [CPResize_image((scale, scale, scale)),
-                          Limit_Min_Max_Threshold(ct_min, ct_max),
-                          CPNormalization(ct_min, ct_max),
-                          CPToTensor()]
+            self.ct_tx = [Resize_image((scale, scale, scale), cupy=True),
+                          Normalization_min_max(-1., 1., cupy=True),
+                          ToTensor(cupy=True)]
         else:
             self.ct_tx = [Resize_image((scale, scale, scale)) if scale_ct else nn.Identity(),
-                          Limit_Min_Max_Threshold(ct_min, ct_max),
-                          Normalization(ct_min, ct_max), 
+                          Normalization_min_max(-1., 1., cupy=False),
                           ToTensor()]
 
 
@@ -409,10 +409,10 @@ class CT_dataset(Dataset):
         self.object_dirs = self._get_dirs()
 
         if cupy:
-            self.ct_tx = [CPResize_image((scale, scale, scale)),
+            self.ct_tx = [Resize_image((scale, scale, scale), cupy=True),
                           Limit_Min_Max_Threshold(ct_min, ct_max),
-                          CPNormalization(ct_min, ct_max),
-                          CPToTensor()]
+                          Normalization(ct_min, ct_max, cupy=True),
+                          ToTensor(cupy=True)]
         else:
             self.ct_tx = [Resize_image((scale, scale, scale)) if scale_ct else nn.Identity(),
                           Limit_Min_Max_Threshold(ct_min, ct_max),
