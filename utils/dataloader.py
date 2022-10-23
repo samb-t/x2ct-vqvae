@@ -326,11 +326,11 @@ class BagCT_dataset(Dataset):
 
         if cupy:
             self.ct_tx = [Resize_image((scale, scale, scale), cupy=True),
-                          Normalization_min_max(-1., 1., cupy=True),
+                          Normalization_min_max(0., 1., cupy=True),
                           ToTensor(cupy=True)]
         else:
             self.ct_tx = [Resize_image((scale, scale, scale)) if scale_ct else nn.Identity(),
-                          Normalization_min_max(-1., 1., cupy=False),
+                          Normalization_min_max(0., 1., cupy=False),
                           ToTensor()]
 
 
