@@ -131,10 +131,10 @@ def train(H, vqgan, vqgan_ema, train_loader, test_loader, optim, d_optim, start_
             
             ## Checkpoint
             if global_step % H.train.checkpoint_steps == 0 and global_step > 0:
-                save_model(vqgan, 'vqgan', global_step, H.run.name)
-                save_model(optim, 'ae_optim', global_step, H.run.name)
-                save_model(d_optim, 'disc_optim', global_step, H.run.name)
-                save_model(vqgan_ema, 'vqgan_ema', global_step, H.run.name)
+                save_model(vqgan, 'vqgan', global_step, f"{H.run.name}_{H.run.experiment}")
+                save_model(optim, 'ae_optim', global_step, f"{H.run.name}_{H.run.experiment}")
+                save_model(d_optim, 'disc_optim', global_step, f"{H.run.name}_{H.run.experiment}")
+                save_model(vqgan_ema, 'vqgan_ema', global_step, f"{H.run.name}_{H.run.experiment}")
             
             end_time = time.time()
             
