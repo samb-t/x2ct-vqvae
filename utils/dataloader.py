@@ -3,7 +3,11 @@ import glob
 import torch
 import torch.nn as nn
 import numpy as np
-import cupy as cp
+CUPY_AVAILABLE = True
+try:
+    import cupy as cp
+except ModuleNotFoundError:
+    CUPY_AVAILABLE = False
 import torchvision
 from random import random
 from PIL import Image

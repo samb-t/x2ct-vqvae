@@ -1,7 +1,11 @@
 import torch
 import numpy as np
-import cupy as cp
-import cupyx.scipy.ndimage
+CUPY_AVAILABLE = True
+try:
+    import cupy as cp
+    import cupyx.scipy.ndimage
+except ModuleNotFoundError:
+    CUPY_AVAILABLE = False
 from scipy import ndimage
 
 

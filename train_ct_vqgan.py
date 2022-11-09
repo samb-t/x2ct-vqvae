@@ -14,7 +14,7 @@ import os
 from collections import defaultdict
 
 from models.vqgan_3d import VQGAN
-from utils.dataloader import CT_dataset
+from utils.dataloader import CT_dataset, BagCT_dataset
 from utils.log_utils import flatten_collection, track_variables, log_stats, plot_images, save_model, config_log
 from utils.train_utils import optim_warmup, update_ema
 from utils.vqgan_utils import load_vqgan_from_checkpoint
@@ -160,11 +160,17 @@ def main(argv):
     vqgan = vqgan.to(device)
     vqgan_ema = vqgan_ema.to(device)
 
-    train_dataset = CT_dataset(data_dir=H.data.data_dir, load_res=H.data.load_res, train=True, scale=H.data.img_size)
+    if H.data.loader == "bagct":
+        train_dataset = BagCT_dataset(data_dir=H.data.data_dir, train=True, scale=H.data.img_size, cupy=False)
+        test_dataset = BagCT_dataset(data_dir=H.data.data_dir, train=False, scale=H.data.img_size, cupy=False)
+    else:
+        train_dataset = CT_dataset(data_dir=H.data.data_dir, load_res=H.data.load_res, train=True, scale=H.data.img_size)
+        test_dataset = CT_dataset(data_dir=H.data.data_dir, load_res=H.data.load_res, train=False, scale=H.data.img_size)
+    
     train_loader = DataLoader(train_dataset, batch_size=H.train.batch_size, shuffle=True, 
                               num_workers=4, pin_memory=True, drop_last=True)
 
-    test_dataset = CT_dataset(data_dir=H.data.data_dir, load_res=H.data.load_res, train=False, scale=H.data.img_size)
+    
     # TODO: Fix evaluation step to work with different sized batches so we can set drop_last here to False
     test_loader = DataLoader(test_dataset, batch_size=H.train.batch_size, shuffle=True, 
                              num_workers=4, pin_memory=True, drop_last=True) 

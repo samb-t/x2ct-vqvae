@@ -9,7 +9,7 @@ def get_config():
     #######################################################################
     config.run = run = ConfigDict()
     # Name for set of experiments in wandb
-    run.name = 'ct-vqgan'
+    run.name = 'baggage-vqgan'
     # Creates a separate log subfolder for each experiment
     run.experiment = 'default'
     run.wandb_dir = ''
@@ -25,7 +25,8 @@ def get_config():
     ############################# DATA CONFIG #############################
     #######################################################################
     config.data = data = ConfigDict()
-    data.data_dir = '/projects/cgw/medical/lidc'
+    data.loader = "bagct"
+    data.data_dir = '/home2/datasets/baggage/durct/process_vol'
     data.img_size = FieldReference(128)
     data.load_res = 256 # data.get_ref('img_size')
     data.channels = 1
@@ -75,15 +76,15 @@ def get_config():
     # Vector Quantizer commitment loss
     model.beta = 0.25
     # Resolutions to apply attention to. With flash attention so fast it might be worth applying to more layers
-    model.attn_resolutions = [8]
+    model.attn_resolutions = []
     # Channels mults applied to nf to increase dim
-    model.ch_mult = [1, 2, 4, 8, 16]
+    model.ch_mult = [1, 2, 4, 8]
     # Number of codes in the codebook
     model.codebook_size = 1024
     # Dimension of each code
     model.emb_dim = 256
     # Spatial size of latents
-    model.latent_shape = [1, 8, 8, 8]
+    model.latent_shape = [1, 16, 16, 16]
     # Number of layers in the discriminator. TODO: Check this against more recent papers since it is fiarly small
     model.disc_layers = 3
     # Adaptive weight limit. Found to improve stability in Unleashing Transformers
@@ -93,7 +94,7 @@ def get_config():
     # Base number of filters in the discriminator
     model.ndf = 32
     # Base number of filters in the autoencoder
-    model.nf = 16
+    model.nf = 32
     # Number of residual blocks per resolution
     model.res_blocks = 2
     # Gumbel Softmax quantisation options
@@ -101,7 +102,8 @@ def get_config():
     model.gumbel_straight_through = False
     # Whether to use perceptual loss. Can't be used for CT Scans at the minute, no perceptual net
     # model.perceptual_loss = False
-    model.recon_weight = 1.0
+    model.recon_weight = 10.0
+    model.resblock_name = "resblock"
 
     #######################################################################
     ########################### OPTIMIZER CONFIG ##########################

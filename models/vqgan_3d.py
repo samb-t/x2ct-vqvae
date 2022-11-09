@@ -19,6 +19,7 @@ class VQGAN(nn.Module):
         self.disc_start_step = H.model.disc_start_step
         self.disc_weight_max = H.model.disc_weight_max
         self.diffaug_policy = H.model.diffaug_policy
+        self.recon_weight = H.model.recon_weight
 
     def train_iter_together(self, x, step):
         stats = {}
@@ -45,7 +46,7 @@ class VQGAN(nn.Module):
         last_layer = self.ae.generator.blocks[-1].weight
         d_weight = calculate_adaptive_weight(nll_loss, g_loss, last_layer, self.disc_weight_max)
         d_weight *= adopt_weight(1, step, self.disc_start_step)
-        loss = nll_loss + d_weight * g_loss + codebook_loss
+        loss = self.recon_weight * nll_loss + d_weight * g_loss + codebook_loss
 
         stats["loss"] = loss
         stats["l1"] = recon_loss.mean()
@@ -121,7 +122,7 @@ class VQGAN(nn.Module):
         last_layer = self.ae.generator.blocks[-1].weight
         d_weight = calculate_adaptive_weight(nll_loss, g_loss, last_layer, self.disc_weight_max)
         d_weight *= adopt_weight(1, step, self.disc_start_step)
-        loss = nll_loss + d_weight * g_loss + codebook_loss
+        loss = self.recon_weight * nll_loss + d_weight * g_loss + codebook_loss
 
         stats["loss"] = loss
         stats["l1"] = recon_loss.mean()
@@ -187,7 +188,8 @@ class VQAutoEncoder(nn.Module):
             H.model.ch_mult,
             H.model.res_blocks,
             H.data.img_size,
-            H.model.attn_resolutions
+            H.model.attn_resolutions,
+            H.model.resblock_name
         )
         if H.model.quantizer == "nearest":
             self.quantize = VectorQuantizer(
@@ -204,7 +206,8 @@ class VQAutoEncoder(nn.Module):
             H.model.ch_mult, 
             H.model.res_blocks, 
             H.data.img_size, 
-            H.model.attn_resolutions
+            H.model.attn_resolutions,
+            H.model.resblock_name
         )
 
     def forward(self, x):
@@ -221,7 +224,7 @@ class VQAutoEncoder(nn.Module):
         return mu, logsigma, quant_stats
 
 class Encoder(nn.Module):
-    def __init__(self, in_channels, nf, out_channels, ch_mult, num_res_blocks, resolution, attn_resolutions):
+    def __init__(self, in_channels, nf, out_channels, ch_mult, num_res_blocks, resolution, attn_resolutions, resblock_name):
         super().__init__()
         num_resolutions = len(ch_mult)
 
@@ -232,12 +235,18 @@ class Encoder(nn.Module):
         # initial convoltion
         blocks.append(nn.Conv3d(in_channels, nf, kernel_size=3, stride=1, padding=1))
 
+        resblocks = {
+            "resblock": ResBlock,
+            "depthwise_block": DepthwiseResBlock
+        }
+        Block = resblocks[resblock_name]
+
         # residual and downsampling blocks, with attention on smaller res (16x16)
         for i in range(num_resolutions):
             block_in_ch = nf * in_ch_mult[i]
             block_out_ch = nf * ch_mult[i]
             for _ in range(num_res_blocks):
-                blocks.append(ResBlock(block_in_ch, block_out_ch))
+                blocks.append(Block(block_in_ch, block_out_ch))
                 block_in_ch = block_out_ch
                 if curr_res in attn_resolutions:
                     blocks.append(AttnBlock(block_in_ch))
@@ -247,9 +256,10 @@ class Encoder(nn.Module):
                 curr_res = curr_res // 2
 
         # non-local attention block
-        blocks.append(ResBlock(block_in_ch, block_in_ch))
-        blocks.append(AttnBlock(block_in_ch))
-        blocks.append(ResBlock(block_in_ch, block_in_ch))
+        blocks.append(Block(block_in_ch, block_in_ch))
+        if curr_res in attn_resolutions:
+            blocks.append(AttnBlock(block_in_ch))
+        blocks.append(Block(block_in_ch, block_in_ch))
 
         # normalise and convert to latent size
         blocks.append(normalize(block_in_ch))
@@ -262,7 +272,7 @@ class Encoder(nn.Module):
         return x
 
 class Generator(nn.Module):
-    def __init__(self, in_channels, out_channels, nf, ch_mult, num_res_blocks, resolution, attn_resolutions):
+    def __init__(self, in_channels, out_channels, nf, ch_mult, num_res_blocks, resolution, attn_resolutions, resblock_name):
         super().__init__()
         num_resolutions = len(ch_mult)
         block_in_ch = nf * ch_mult[-1]
@@ -272,16 +282,24 @@ class Generator(nn.Module):
         # initial conv
         blocks.append(nn.Conv3d(in_channels, block_in_ch, kernel_size=3, stride=1, padding=1))
 
+        resblocks = {
+            "resblock": ResBlock,
+            "depthwise_block": DepthwiseResBlock
+        }
+        Block = resblocks[resblock_name]
+
+
         # non-local attention block
-        blocks.append(ResBlock(block_in_ch, block_in_ch))
-        blocks.append(AttnBlock(block_in_ch))
-        blocks.append(ResBlock(block_in_ch, block_in_ch))
+        blocks.append(Block(block_in_ch, block_in_ch))
+        if curr_res in attn_resolutions:
+            blocks.append(AttnBlock(block_in_ch))
+        blocks.append(Block(block_in_ch, block_in_ch))
 
         for i in reversed(range(num_resolutions)):
             block_out_ch = nf * ch_mult[i]
 
             for _ in range(num_res_blocks):
-                blocks.append(ResBlock(block_in_ch, block_out_ch))
+                blocks.append(Block(block_in_ch, block_out_ch))
                 block_in_ch = block_out_ch
 
                 if curr_res in attn_resolutions:
@@ -451,6 +469,41 @@ class ResBlock(nn.Module):
         if self.in_channels != self.out_channels:
             x_in = self.conv_out(x_in)
 
+        return x + x_in
+
+class LayerNorm(nn.Module):
+    def __init__(self, dim, eps = 1e-5):
+        super().__init__()
+        self.eps = eps
+        self.gamma = nn.Parameter(torch.ones(1, dim, 1, 1, 1))
+
+    def forward(self, x):
+        var = torch.var(x, dim = 1, unbiased = False, keepdim = True)
+        mean = torch.mean(x, dim = 1, keepdim = True)
+        return (x - mean) / (var + self.eps).sqrt() * self.gamma
+
+class DepthwiseResBlock(nn.Module):
+    def __init__(self, in_channels, out_channels=None):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels = in_channels if out_channels is None else out_channels
+        self.norm1 = LayerNorm(in_channels)
+        self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=1, stride=1, padding=0)
+        self.norm2 = LayerNorm(out_channels)
+        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, groups=out_channels)
+        self.conv_out = nn.Conv3d(in_channels, out_channels, kernel_size=1, stride=1, padding=0)
+
+    def forward(self, x_in):
+        x = x_in
+        x = self.norm1(x)
+        x = F.gelu(x)
+        x = self.conv1(x)
+        x = self.norm2(x)
+        x = F.gelu(x)
+        x = self.conv2(x)
+        if self.in_channels != self.out_channels:
+            x_in = self.conv_out(x_in)
+        
         return x + x_in
 
 class AttnBlock(nn.Module):
