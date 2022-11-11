@@ -288,8 +288,8 @@ class Encoder(nn.Module):
 
         # non-local attention block
         blocks.append(Block(block_in_ch, block_in_ch))
-        if curr_res in attn_resolutions:
-            blocks.append(AttnBlock(block_in_ch))
+        # if curr_res in attn_resolutions:
+        blocks.append(AttnBlock(block_in_ch))
         blocks.append(Block(block_in_ch, block_in_ch))
 
         # normalise and convert to latent size
@@ -322,8 +322,8 @@ class Generator(nn.Module):
 
         # non-local attention block
         blocks.append(Block(block_in_ch, block_in_ch))
-        if curr_res in attn_resolutions:
-            blocks.append(AttnBlock(block_in_ch))
+        # if curr_res in attn_resolutions:
+        blocks.append(AttnBlock(block_in_ch))
         blocks.append(Block(block_in_ch, block_in_ch))
 
         for i in reversed(range(num_resolutions)):

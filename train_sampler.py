@@ -1,6 +1,6 @@
 import torch
 from torch.utils.data import DataLoader
-from einops import rearrange
+from einops import rearrange, repeat
 import numpy as np
 
 import wandb
@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from models.vqgan_2d import VQAutoEncoder as VQAutoEncoder2D, Generator as Generator2D
 from models.vqgan_3d import VQAutoEncoder as VQAutoEncoder3D, Generator as Generator3D
-from utils.dataloader import XCT_dataset
+from utils.dataloader import XCT_dataset, BagXCT_dataset
 from utils.sampler_utils import retrieve_autoencoder_components_state_dicts, generate_latent_ids, get_latent_loaders, get_sampler, latent_ids_to_onehot
 from utils.log_utils import log, flatten_collection, track_variables, log_stats, plot_images, save_model, config_log, load_model
 from utils.train_utils import optim_warmup, update_ema
@@ -64,6 +64,12 @@ def train(H, sampler, sampler_ema, generator_ct, generator_xray, train_loader, t
             context = data["xray_embed"].to(device, non_blocking=True)
             x = data["ct_codes"].to(device, non_blocking=True)
             # TODO: Fix the latents generation function to have this there instead of here
+            
+            # Randomly pick some num_xrays views to train on
+            indices = torch.stack([torch.from_numpy(np.random.choice(context.size(2), H.data.num_xrays, replace=False)) for _ in range(context.size(0))]).to(device)
+            indices = repeat(indices, "b r -> b () r l c", l=context.size(3), c=context.size(4))
+            # TODO: Don't repeat and use fancy index select thing instead
+            context = torch.gather(context, 2, indices)
             context = rearrange(context, "b () r l c -> b (r l) c")
             x = rearrange(x, "b () l -> b l")
 
@@ -170,16 +176,25 @@ def main(argv):
         ae_xray = VQAutoEncoder2D(H.xray_config)
         ae_xray.load_state_dict(ae_state_dict, strict=False)
 
-        train_dataset = XCT_dataset(data_dir=H.data.data_dir, train=True, 
-                                    xray_scale=H.xray_config.data.img_size, 
-                                    ct_scale=H.ct_config.data.img_size ,
-                                    projections=H.data.num_xrays, 
-                                    load_res=H.data.load_res)
-        test_dataset = XCT_dataset(data_dir=H.data.data_dir, train=False, 
-                                    xray_scale=H.xray_config.data.img_size, 
-                                    ct_scale=H.ct_config.data.img_size ,
-                                    projections=H.data.num_xrays, 
-                                    load_res=H.data.load_res)
+        if H.data.loader == "bagct":
+            train_dataset = BagXCT_dataset(data_dir=H.data.data_dir, train=True, 
+                                           xray_scale=H.xray_config.data.img_size, 
+                                           ct_scale=H.ct_config.data.img_size,
+                                           train_on_all_angles=H.model.train_on_all_angles)
+            test_dataset = BagXCT_dataset(data_dir=H.data.data_dir, train=False, 
+                                          xray_scale=H.xray_config.data.img_size, 
+                                          ct_scale=H.ct_config.data.img_size)
+        else:
+            train_dataset = XCT_dataset(data_dir=H.data.data_dir, train=True, 
+                                        xray_scale=H.xray_config.data.img_size, 
+                                        ct_scale=H.ct_config.data.img_size,
+                                        projections=H.data.num_xrays, 
+                                        load_res=H.data.load_res)
+            test_dataset = XCT_dataset(data_dir=H.data.data_dir, train=False, 
+                                        xray_scale=H.xray_config.data.img_size, 
+                                        ct_scale=H.ct_config.data.img_size ,
+                                        projections=H.data.num_xrays, 
+                                        load_res=H.data.load_res)
         train_loader = DataLoader(train_dataset, batch_size=1, shuffle=False, 
                                     num_workers=4, pin_memory=True, drop_last=False)
         test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, 
