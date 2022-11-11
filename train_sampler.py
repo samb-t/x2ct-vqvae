@@ -246,7 +246,7 @@ def main(argv):
     sampler_ema = copy.deepcopy(sampler).to(device)
 
     if H.optimizer.weight_decay > 0:
-        torch.optim.AdamW(sampler.parameters(), lr=H.optimizer.learning_rate, weight_decay=H.optimizer.weight_decay)
+        optim = torch.optim.AdamW(sampler.parameters(), lr=H.optimizer.learning_rate, weight_decay=H.optimizer.weight_decay)
     else:
         optim = torch.optim.Adam(sampler.parameters(), lr=H.optimizer.learning_rate)
 
