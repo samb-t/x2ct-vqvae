@@ -74,6 +74,7 @@ def get_config():
     model.attn_pdrop = 0.5
     model.embd_pdrop = 0.5
     model.resid_pdrop = 0.5
+    model.train_on_all_angles = True
 
     config.diffusion = diffusion = ConfigDict()
     # What loss to use. Choose from ['elbo', 'mlm', 'reweighted_elbo']
