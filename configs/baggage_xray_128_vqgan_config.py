@@ -9,7 +9,7 @@ def get_config():
     #######################################################################
     config.run = run = ConfigDict()
     # Name for set of experiments in wandb
-    run.name = 'baggage-vqgan'
+    run.name = 'baggage-xray-vqgan'
     # Creates a separate log subfolder for each experiment
     run.experiment = 'default'
     run.wandb_dir = ''
@@ -25,10 +25,10 @@ def get_config():
     ############################# DATA CONFIG #############################
     #######################################################################
     config.data = data = ConfigDict()
-    data.loader = "bagct"
+    data.loader = "bagxray"
     data.data_dir = '/home2/datasets/baggage/durct/process_vol'
     data.img_size = FieldReference(128)
-    data.load_res = 256 # data.get_ref('img_size')
+    data.degrees = 45
     data.channels = 1
 
     #######################################################################
@@ -48,7 +48,7 @@ def get_config():
     # Whether to use automatic mixed precision. For VQGAN can be worse 
     # with small batches
     train.amp = True
-    train.batch_size = FieldReference(8)
+    train.batch_size = FieldReference(16)
     # How often to plot new loss values to graphs
     train.plot_graph_steps = 100
     # How often to plot reconstruction images
@@ -67,7 +67,7 @@ def get_config():
     #######################################################################
     config.model = model = ConfigDict()
     # Name of architecture. Currently in ['2d_vqgan', '3d_vqgan']. ViT architecture on TODO list
-    model.name = "3d_vqgan"
+    model.name = "2d_vqgan"
     # Differential Augmentation options to be put in one string split by commas. Currently in ['translation', 'cutout', 'color']
     # Think I've seen a paper showing that spatial augmentations seem to be more useful than colour augmentations
     model.diffaug_policy = 'translation,cutout'
@@ -76,15 +76,15 @@ def get_config():
     # Vector Quantizer commitment loss
     model.beta = 0.25
     # Resolutions to apply attention to. With flash attention so fast it might be worth applying to more layers
-    model.attn_resolutions = []
+    model.attn_resolutions = [16]
     # Channels mults applied to nf to increase dim
-    model.ch_mult = [1, 2, 4, 8]
+    model.ch_mult = [1, 2, 3, 4]
     # Number of codes in the codebook
     model.codebook_size = 4096
     # Dimension of each code
     model.emb_dim = 256
     # Spatial size of latents
-    model.latent_shape = [1, 16, 16, 16]
+    model.latent_shape = [1, 16, 16]
     # Number of layers in the discriminator. TODO: Check this against more recent papers since it is fiarly small
     model.disc_layers = 3
     # Adaptive weight limit. Found to improve stability in Unleashing Transformers
@@ -92,18 +92,19 @@ def get_config():
     # What step to start using the discriminator
     model.disc_start_step = 30001
     # Base number of filters in the discriminator
-    model.ndf = 32
+    model.ndf = 64
     # Base number of filters in the autoencoder
-    model.nf = 32
+    model.nf = 64
     # Number of residual blocks per resolution
     model.res_blocks = 2
     # Gumbel Softmax quantisation options
     model.gumbel_kl_weight = 1e-8
     model.gumbel_straight_through = False
-    # Whether to use perceptual loss. Can't be used for CT Scans at the minute, no perceptual net
+    # Whether to use perceptual loss. Not sure how effective this would be for X-Rays. 
+    # It might make it look better to the eye but is that a good thing?
     model.perceptual_loss = False
     model.perceptual_weight = 0.1
-    model.recon_weight = 10.0
+    model.recon_weight = 1.0
     model.resblock_name = "resblock"
     model.pre_augmentation = False
 

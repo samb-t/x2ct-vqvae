@@ -70,7 +70,7 @@ def get_config():
     model.name = "3d_vqgan"
     # Differential Augmentation options to be put in one string split by commas. Currently in ['translation', 'cutout', 'color']
     # Think I've seen a paper showing that spatial augmentations seem to be more useful than colour augmentations
-    model.diffaug_policy = 'translation,cutout'
+    model.diffaug_policy = ''
     # Vector Quantizer module. Currently in ['nearest', 'gumbel']
     model.quantizer = 'nearest'
     # Vector Quantizer commitment loss
@@ -80,7 +80,7 @@ def get_config():
     # Channels mults applied to nf to increase dim
     model.ch_mult = [1, 2, 4, 8]
     # Number of codes in the codebook
-    model.codebook_size = 4096
+    model.codebook_size = 1024
     # Dimension of each code
     model.emb_dim = 256
     # Spatial size of latents
@@ -101,11 +101,11 @@ def get_config():
     model.gumbel_kl_weight = 1e-8
     model.gumbel_straight_through = False
     # Whether to use perceptual loss. Can't be used for CT Scans at the minute, no perceptual net
-    model.perceptual_loss = False
+    model.perceptual_loss = True
     model.perceptual_weight = 0.1
     model.recon_weight = 10.0
     model.resblock_name = "resblock"
-    model.pre_augmentation = False
+    model.pre_augmentation = True
 
     #######################################################################
     ########################### OPTIMIZER CONFIG ##########################

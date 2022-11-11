@@ -4,6 +4,7 @@
 
 import torch
 import torch.nn.functional as F
+from einops import rearrange
 
 
 def DiffAugment(x, policy='', channels_first=True):
@@ -56,7 +57,7 @@ def rand_translation(x, ratio=0.125):
     return x
 
 
-def rand_cutout(x, ratio=0.5):
+def rand_cutout(x, ratio=0.5, apply_ratio=1.0):
     cutout_size = int(x.size(2) * ratio + 0.5), int(x.size(3) * ratio + 0.5), int(x.size(4) * ratio + 0.5)
     offset_x = torch.randint(0, x.size(2) + (1 - cutout_size[0] % 2), size=[x.size(0), 1, 1, 1], device=x.device)
     offset_y = torch.randint(0, x.size(3) + (1 - cutout_size[1] % 2), size=[x.size(0), 1, 1, 1], device=x.device)
@@ -73,6 +74,11 @@ def rand_cutout(x, ratio=0.5):
     grid_z = torch.clamp(grid_z + offset_z - cutout_size[2] // 2, min=0, max=x.size(4) - 1)
     mask = torch.ones(x.size(0), x.size(2), x.size(3), x.size(4), dtype=x.dtype, device=x.device)
     mask[grid_batch, grid_x, grid_y, grid_z] = 0
+
+    apply_mask = (torch.rand(x.size(0), dtype=x.dtype, device=x.device) > apply_ratio).to(x.dtype)
+    apply_mask = rearrange(apply_mask, "b -> b () () ()")
+    mask = (mask + apply_mask).clamp(max=1)
+
     x = x * mask.unsqueeze(1)
     return x
 

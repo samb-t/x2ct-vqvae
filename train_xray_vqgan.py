@@ -14,7 +14,7 @@ import os
 from collections import defaultdict
 
 from models.vqgan_2d import VQGAN
-from utils.dataloader import XRay_dataset
+from utils.dataloader import XRay_dataset, BagXRay_dataset
 from utils.log_utils import flatten_collection, track_variables, log_stats, plot_images, save_model, config_log
 from utils.train_utils import optim_warmup, update_ema
 from utils.vqgan_utils import load_vqgan_from_checkpoint
@@ -152,13 +152,21 @@ def main(argv):
     vqgan = vqgan.to(device)
     vqgan_ema = vqgan_ema.to(device)
 
-    train_dataset = XRay_dataset(data_dir=H.data.data_dir, train=True, scale=H.data.img_size, 
-                                 projections=H.data.num_xrays)
+    if H.data.loader == "bagxray":
+        train_dataset = BagXRay_dataset(data_dir=H.data.data_dir, train=True, scale=H.data.img_size, 
+                                    degrees=H.data.degrees)
+
+        test_dataset = BagXRay_dataset(data_dir=H.data.data_dir, train=False, scale=H.data.img_size, 
+                                    degrees=H.data.degrees)
+    else:
+        train_dataset = XRay_dataset(data_dir=H.data.data_dir, train=True, scale=H.data.img_size, 
+                                    projections=H.data.num_xrays)
+
+        test_dataset = XRay_dataset(data_dir=H.data.data_dir, train=False, scale=H.data.img_size, 
+                                    projections=H.data.num_xrays)
+
     train_loader = DataLoader(train_dataset, batch_size=H.train.batch_size, shuffle=True, 
                               num_workers=4, pin_memory=True, drop_last=True)
-
-    test_dataset = XRay_dataset(data_dir=H.data.data_dir, train=False, scale=H.data.img_size, 
-                                projections=H.data.num_xrays)
     # TODO: Fix evaluation step to work with different sized batches so we can set drop_last here to False
     test_loader = DataLoader(test_dataset, batch_size=H.train.batch_size, shuffle=True, 
                              num_workers=4, pin_memory=True, drop_last=True) 
