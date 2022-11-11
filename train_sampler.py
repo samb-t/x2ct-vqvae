@@ -220,7 +220,8 @@ def main(argv):
         H.ct_config.model.ch_mult, 
         H.ct_config.model.res_blocks, 
         H.ct_config.data.img_size, 
-        H.ct_config.model.attn_resolutions
+        H.ct_config.model.attn_resolutions,
+        H.ct_config.model.resblock_name
     )
     generator_ct.load_state_dict(quanitzer_and_generator_state_dict, strict=False)
     generator_ct = generator_ct.to(device)
@@ -244,7 +245,10 @@ def main(argv):
     sampler = get_sampler(H, ct_embedding_weight).to(device)
     sampler_ema = copy.deepcopy(sampler).to(device)
 
-    optim = torch.optim.Adam(sampler.parameters(), lr=H.optimizer.learning_rate)
+    if H.optimizer.weight_decay > 0:
+        torch.optim.AdamW(sampler.parameters(), lr=H.optimizer.learning_rate, weight_decay=H.optimizer.weight_decay)
+    else:
+        optim = torch.optim.Adam(sampler.parameters(), lr=H.optimizer.learning_rate)
 
     start_step = 0
     if H.train.load_step > 0:
