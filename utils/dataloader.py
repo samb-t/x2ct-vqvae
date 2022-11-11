@@ -286,7 +286,7 @@ class BagXCT_dataset(Dataset):
                 xrays_list.append(xray)
         xrays = torch.stack(xrays_list, 0)
 
-        ct_path = f'{object_dir}/npy/*.npy'
+        ct_path = f'{object_dir}/npz/*.npy'
         ct_file = glob.glob(ct_path)
         ct_scan = cp.load(ct_file[0]) if self.cupy else torch.from_numpy(np.load(ct_file[0]))
 
