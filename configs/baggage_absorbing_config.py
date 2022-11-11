@@ -26,6 +26,7 @@ def get_config():
     #######################################################################
     config.data = data = ConfigDict()
     data.data_dir = '/home2/datasets/baggage/durct/process_vol'
+    data.loader = "bagct"
     data.img_size = FieldReference(128)
     data.num_xrays = 2
     data.channels = 1
