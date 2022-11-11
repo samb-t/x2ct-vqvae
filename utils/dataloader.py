@@ -227,6 +227,93 @@ class XRay_dataset(Dataset):
         with open(split_file) as file:
             data = [n.rstrip() for n in file]
         return data
+    
+    
+class BagXCT_dataset(Dataset):
+    """
+    Class for loading CT scans
+    and paired Digitaly Reconstructed Radiographs
+    (DRR) images
+    """
+    def __init__(self, data_dir, train, xray_scale=256, ct_scale=128,
+                 direction='both', ct_min=0, ct_max=2000, scale_ct=True,
+                 load_res=None, cupy=False, types='grayscale'):
+
+        assert os.path.exists(data_dir), f"Error: {data_dir} not found!"
+        split_file = f'data/bags_train_split.txt' if train else f'data/bags_test_split.txt'
+        self.data_dir = data_dir
+        self.ct_min = ct_min
+        self.cupy = cupy
+        self.load_res = load_res
+        self.types = types
+        self.direction = direction
+
+        self.split_list = self._get_split(split_file)
+        self.object_dirs = self._get_dirs()
+        
+        self.xray_tx = [transforms.Resize(xray_scale),
+                        transforms.RandomApply(torch.nn.ModuleList([
+                            transforms.RandomResizedCrop(xray_scale, scale=(0.5, 1.0), ratio=(0.98, 1.02)),
+                            transforms.CenterCrop(xray_scale)]),
+                                               p=0.1),
+                        Normalization(0, 255),
+                        ToTensor()]
+        if cupy:
+            self.ct_tx = [Resize_image((ct_scale, ct_scale, ct_scale), cupy=True),
+                          Normalization_min_max(0., 1., cupy=True),
+                          ToTensor(cupy=True)]
+        else:
+            self.ct_tx = [Resize_image((ct_scale, ct_scale, ct_scale)) if scale_ct else nn.Identity(),
+                          Normalization_min_max(0., 1., cupy=False),
+                          ToTensor()]
+
+    def __len__(self):
+        return len(self.object_dirs)
+
+    def __getitem__(self, idx):
+        object_dir = self.object_dirs[idx]
+        xrays_list = []
+        
+        channels = ['rgb', 'grayscale'] if self.types == 'both' else [self.types]
+        camera = ['azimuth', 'elevation'] if self.direction == 'both' else [self.direction]
+        for ch in channels:
+            for cam in camera:
+                file_name = f"projections_{ch}/{os.path.basename(object_dir)}_{cam}_{90}.png"
+                xray = Image.open(os.path.join(object_dir, file_name))
+                xray = xray.convert('L') if self.types == 'grayscale' else xray.convert('RGB')
+                for transf in self.xray_tx:
+                    xray = transf(xray)
+                xrays_list.append(xray)
+        xrays = torch.stack(xrays_list, 0)
+
+        ct_path = f'{object_dir}/npy/*.npy'
+        ct_file = glob.glob(ct_path)
+        ct_scan = cp.load(ct_file[0]) if self.cupy else torch.from_numpy(np.load(ct_file[0]))
+
+        for transf in self.ct_tx:
+            ct_scan = transf(ct_scan)
+        
+        xrays = xrays.unsqueeze(1)
+        ct_scan = ct_scan.unsqueeze(0)
+
+        data = {
+            "xrays": xrays,
+            "ct": ct_scan,
+            "dir_name": object_dir}
+
+        return data
+
+    def _get_dirs(self):
+        data_dirs = os.listdir(self.data_dir)
+        dirs = [os.path.join(self.data_dir, x) for x in data_dirs if x in set(self.split_list)]
+        return dirs
+
+    @staticmethod
+    def _get_split(split_file):
+        with open(split_file) as file:
+            data = [n.rstrip() for n in file]
+        return data
+
 
 
 class BagXRay_dataset(Dataset):
