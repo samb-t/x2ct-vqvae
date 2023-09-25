@@ -38,6 +38,15 @@ class VQGAN(nn.Module):
         self.perceptual_loss = H.model.perceptual_loss
         self.perceptual_weight = H.model.perceptual_weight
 
+        if H.model.ada:
+            from .ada_3d import AdaptiveDiscriminatorAugmentation
+            self.disc = AdaptiveDiscriminatorAugmentation(self.disc)
+            self.diffaug_policy = ''
+        else:
+            from .diffaug import DiffAugment
+            self.diffaug_policy = H.model.diffaug_policy
+
+
     def train_iter_together(self, x, step):
         stats = {}
         # update gumbel softmax temperature based on step. Anneal from 1 to 1/16 over 150000 steps
@@ -107,11 +116,11 @@ class VQGAN(nn.Module):
         stats = {}
         x_hat, codebook_loss, quant_stats = self.ae(x)
         if self.diffaug_policy != '':
-            logits_real = self.disc(DiffAugment(x, policy=self.diffaug_policy))
-            logits_fake = self.disc(DiffAugment(x_hat.contiguous().detach(), policy=self.diffaug_policy))
+            logits_real, _ = self.disc(DiffAugment(x, policy=self.diffaug_policy))
+            logits_fake, _ = self.disc(DiffAugment(x_hat.contiguous().detach(), policy=self.diffaug_policy))
         else:
-            logits_real = self.disc(x)
-            logits_fake = self.disc(x_hat.contiguous().detach()) # detach so that generator isn"t also updated
+            logits_real,_ = self.disc(x)
+            logits_fake,_ = self.disc(x_hat.contiguous().detach()) # detach so that generator isn"t also updated
         d_loss = hinge_d_loss(logits_real, logits_fake)
         stats["d_loss"] = d_loss
         stats["codebook_loss"] = codebook_loss
@@ -127,15 +136,14 @@ class VQGAN(nn.Module):
         if self.ae.quantizer_type == "gumbel":
             self.ae.quantize.temperature = max(1/16, ((-1/160000) * step) + 1)
             stats["gumbel_temp"] = self.ae.quantize.temperature
+            
+        x_hat, codebook_loss, quant_stats = self.ae(x)
 
-        if x_hat is None:
-            x_hat, codebook_loss, quant_stats = self.ae(x)
+        stats["codebook_loss"] = codebook_loss
+        stats["latent_ids"] = quant_stats["min_encoding_indices"].squeeze(1).reshape(x.shape[0], -1)
 
-            stats["codebook_loss"] = codebook_loss
-            stats["latent_ids"] = quant_stats["min_encoding_indices"].squeeze(1).reshape(x.shape[0], -1)
-
-            if "mean_distance" in stats:
-                stats["mean_code_distance"] = quant_stats["mean_distance"]
+        if "mean_distance" in stats:
+            stats["mean_code_distance"] = quant_stats["mean_distance"]
 
         # get recon/perceptual loss
         recon_loss = torch.abs(x.contiguous() - x_hat.contiguous())  # L1 loss
@@ -143,17 +151,30 @@ class VQGAN(nn.Module):
         nll_loss = torch.mean(nll_loss)
 
         # augment for input to discriminator
+        x_hat_pre_aug = x_hat.detach().clone()
         if self.diffaug_policy != '':
-            x_hat_pre_aug = x_hat.detach().clone()
-            x_hat = DiffAugment(x_hat, policy=self.diffaug_policy)
+            logits_fake, _ = self.disc(DiffAugment(x_hat, policy=self.diffaug_policy))
+        else:
+            # use ADA
+            logits_fake, _ = self.disc(x_hat, is_fake=True) # detach so that generator isn't also updated
 
         # update generator
-        logits_fake = self.disc(x_hat)
         g_loss = -torch.mean(logits_fake)
         last_layer = self.ae.generator.blocks[-1].weight
         d_weight = calculate_adaptive_weight(nll_loss, g_loss, last_layer, self.disc_weight_max)
         d_weight *= adopt_weight(1, step, self.disc_start_step)
         loss = self.recon_weight * nll_loss + d_weight * g_loss + codebook_loss
+
+        if self.perceptual_loss:
+            if self.diffaug_policy != '':
+                # redo activations without augmentations
+                _, fake_activations = self.disc(x_hat_pre_aug)
+            # No nead to pass grads though to the discriminator to change features for ground truth
+            with torch.no_grad():
+                _, real_activations = self.disc(x.contiguous().detach())
+            perceptual_loss = activations_difference(fake_activations, real_activations)
+            loss += self.perceptual_weight * perceptual_loss
+            stats["perceptual_loss"] = perceptual_loss
 
         stats["loss"] = loss
         stats["l1"] = recon_loss.mean()
@@ -161,8 +182,7 @@ class VQGAN(nn.Module):
         stats["g_loss"] = g_loss
         stats["d_weight"] = d_weight
         
-        if self.diff_aug:
-            x_hat = x_hat_pre_aug
+        x_hat = x_hat_pre_aug
         
         return x_hat, stats
 
@@ -182,7 +202,7 @@ class VQGAN(nn.Module):
         nll_loss = torch.mean(nll_loss)
 
         # update generator
-        logits_fake = self.disc(x_hat)
+        logits_fake, _ = self.disc(x_hat)
         g_loss = -torch.mean(logits_fake)
 
         stats["val_l1"] = recon_loss.mean()

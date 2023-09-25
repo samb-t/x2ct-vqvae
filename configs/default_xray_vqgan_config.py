@@ -25,10 +25,12 @@ def get_config():
     ############################# DATA CONFIG #############################
     #######################################################################
     config.data = data = ConfigDict()
-    data.data_dir = '/projects/cgw/medical/lidc'
+    data.data_dir = '/home2/datasets/baggage/lidc'
     data.img_size = FieldReference(256)
     data.num_xrays = 2
     data.channels = 1
+    data.dataset = 'chest'
+    data.use_synthetic =  False
 
     #######################################################################
     ########################### TRAINING CONFIG ###########################
@@ -48,6 +50,7 @@ def get_config():
     # with small batches
     train.amp = True
     train.batch_size = FieldReference(16)
+    train.test_batch_size = FieldReference(8)
     # How often to plot new loss values to graphs
     train.plot_graph_steps = 100
     # How often to plot reconstruction images
@@ -70,6 +73,8 @@ def get_config():
     # Differential Augmentation options to be put in one string split by commas. Currently in ['translation', 'cutout', 'color']
     # Think I've seen a paper showing that spatial augmentations seem to be more useful than colour augmentations
     model.diffaug_policy = 'translation,cutout'
+    # use ada framework (arxiv.org/abs/2006.06676) for data augmentations instead of diffaug
+    model.ada = True
     # Vector Quantizer module. Currently in ['nearest', 'gumbel']
     model.quantizer = 'nearest'
     # Vector Quantizer commitment loss

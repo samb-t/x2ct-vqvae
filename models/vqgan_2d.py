@@ -1,5 +1,5 @@
 '''
-VQGAN code, originally from Taming Transformers, adapted for Unleashing Transformers
+VQGAN code, originally from Unleashing Transformers
 '''
 
 import lpips
@@ -11,6 +11,7 @@ from .diffaug import DiffAugment
 from utils.vqgan_utils import normalize, swish, adopt_weight, hinge_d_loss, calculate_adaptive_weight
 from utils.log_utils import log
 
+
 class VQGAN(nn.Module):
     def __init__(self, H):
         super().__init__()
@@ -21,12 +22,19 @@ class VQGAN(nn.Module):
             n_layers=H.model.disc_layers
         )
         self.perceptual = None
+        self.disc_start_step = H.model.disc_start_step
+        self.disc_weight_max = H.model.disc_weight_max
+
         if H.model.perceptual_loss:
             self.perceptual = lpips.LPIPS(net="vgg")
             self.perceptual_weight = H.model.perceptual_weight
-        self.disc_start_step = H.model.disc_start_step
-        self.disc_weight_max = H.model.disc_weight_max
-        self.diffaug_policy = H.model.diffaug_policy
+        if H.model.ada:
+            from .ada_2d import AdaptiveDiscriminatorAugmentation
+            self.disc = AdaptiveDiscriminatorAugmentation(self.disc)
+            self.diffaug_policy = ''
+        else:
+            from .diffaug import DiffAugment
+            self.diffaug_policy = H.model.diffaug_policy
 
     def train_iter_together(self, x, step):
         """
@@ -56,6 +64,9 @@ class VQGAN(nn.Module):
         if self.diffaug_policy != '':
             x_hat_pre_aug = x_hat.detach().clone()
             x_hat = DiffAugment(x_hat, policy=self.diffaug_policy)
+        else:
+            logits_real = self.disc(x)
+            logits_fake = self.disc(x_hat.contiguous().detach())
 
         # update generator
         logits_fake = self.disc(x_hat)
@@ -98,8 +109,9 @@ class VQGAN(nn.Module):
             logits_real = self.disc(DiffAugment(x, policy=self.diffaug_policy))
             logits_fake = self.disc(DiffAugment(x_hat.contiguous().detach(), policy=self.diffaug_policy))
         else:
+            # use ada
             logits_real = self.disc(x)
-            logits_fake = self.disc(x_hat.contiguous().detach()) # detach so that generator isn"t also updated
+            logits_fake = self.disc(x_hat.contiguous().detach(), is_fake=True) # detach so that generator isn"t also updated
         d_loss = hinge_d_loss(logits_real, logits_fake)
         stats["d_loss"] = d_loss
         stats["codebook_loss"] = codebook_loss
@@ -116,14 +128,13 @@ class VQGAN(nn.Module):
             self.ae.quantize.temperature = max(1/16, ((-1/160000) * step) + 1)
             stats["gumbel_temp"] = self.ae.quantize.temperature
 
-        if x_hat is None:
-            x_hat, codebook_loss, quant_stats = self.ae(x)
+        x_hat, codebook_loss, quant_stats = self.ae(x)
 
-            stats["codebook_loss"] = codebook_loss
-            stats["latent_ids"] = quant_stats["min_encoding_indices"].squeeze(1).reshape(x.shape[0], -1)
+        stats["codebook_loss"] = codebook_loss
+        stats["latent_ids"] = quant_stats["min_encoding_indices"].squeeze(1).reshape(x.shape[0], -1)
 
-            if "mean_distance" in stats:
-                stats["mean_code_distance"] = quant_stats["mean_distance"]
+        if "mean_distance" in stats:
+            stats["mean_code_distance"] = quant_stats["mean_distance"]
 
         # get recon/perceptual loss
         recon_loss = torch.abs(x.contiguous() - x_hat.contiguous())  # L1 loss
@@ -134,13 +145,15 @@ class VQGAN(nn.Module):
             nll_loss = recon_loss
         nll_loss = torch.mean(nll_loss)
 
+        x_hat_pre_aug = x_hat.detach().clone()
         # augment for input to discriminator
         if self.diffaug_policy != '':
-            x_hat_pre_aug = x_hat.detach().clone()
-            x_hat = DiffAugment(x_hat, policy=self.diffaug_policy)
+            logits_fake = self.disc(DiffAugment(x_hat, policy=self.diffaug_policy))
+        else:
+            # use ada
+            logits_fake = self.disc(x_hat, is_fake=True)
 
         # update generator
-        logits_fake = self.disc(x_hat)
         g_loss = -torch.mean(logits_fake)
         last_layer = self.ae.generator.blocks[-1].weight
         d_weight = calculate_adaptive_weight(nll_loss, g_loss, last_layer, self.disc_weight_max)
@@ -155,8 +168,7 @@ class VQGAN(nn.Module):
         stats["g_loss"] = g_loss
         stats["d_weight"] = d_weight
         
-        if self.diff_aug:
-            x_hat = x_hat_pre_aug
+        x_hat = x_hat_pre_aug
         
         return x_hat, stats
 

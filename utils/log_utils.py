@@ -77,22 +77,22 @@ def start_training_log(hparams):
 def save_model(model, model_save_name, step, log_dir):
     log_dir = "logs/" + log_dir + "/saved_models"
     os.makedirs(log_dir, exist_ok=True)
-    model_name = f"{model_save_name}.th"#_{step}.th"
-    log(f"Saving {model_save_name} to {model_save_name}.th")#_{str(step)}.th")
+    model_name = f"{model_save_name}_{step}.th"
+    log(f"Saving {model_save_name} to {model_save_name}_{str(step)}.th")
     torch.save(model.state_dict(), os.path.join(log_dir, model_name))
 
 
 def load_model(model, model_load_name, step, log_dir, strict=False):
-    log(f"Loading {model_load_name}.th")
+    log(f"Loading {model_load_name}_{str(step)}.th")
     log_dir = "logs/" + log_dir + "/saved_models"
     try:
         model.load_state_dict(
-            torch.load(os.path.join(log_dir, f"{model_load_name}.th")),
+            torch.load(os.path.join(log_dir, f"{model_load_name}_{str(step)}.th")),
             strict=strict,
         )
     except TypeError:  # for some reason optimisers don't like the strict keyword
         model.load_state_dict(
-            torch.load(os.path.join(log_dir, f"{model_load_name}.th")),
+            torch.load(os.path.join(log_dir, f"{model_load_name}_{str(step)}.th")),
         )
 
     return model
