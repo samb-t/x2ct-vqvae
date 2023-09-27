@@ -72,11 +72,11 @@ def train(H, vqgan, vqgan_ema, train_loader, test_loader, optim, d_optim, start_
             
             elif H.train.gan_training_mode == "alternating":
                 # Update discriminator
-                x_hat, d_stats, stats = None, dict(), dict()
-                if global_step > H.model.disc_start_step:
+                x_hat, d_stats = None, dict()
+                if global_step > H.train.disc_start_step:
                     with torch.cuda.amp.autocast(enabled=H.train.amp):
                         x_hat, d_stats = vqgan.train_discriminator_iter(global_step, x)
-                    update_model_weights(d_optim, d_stats['d_loss'], amp=H.train.amp, scaler=d_scaler)
+                    update_model_weights(d_optim, stats['d_loss'], amp=H.train.amp, scaler=d_scaler)
                 
                 # Update generator
                 with torch.cuda.amp.autocast(enabled=H.train.amp):
@@ -137,7 +137,7 @@ def main(argv):
     train_kwargs = {}
 
     # wandb can be disabled by passing in --config.run.wandb_mode=disabled
-    wandb.init(name=H.run.experiment, project=H.run.name, config=flatten_collection(H), save_code=True, dir=H.run.wandb_dir, mode=H.run.wandb_mode)
+    wandb.init(project=H.run.name, config=flatten_collection(H), save_code=True, dir=H.run.wandb_dir, mode=H.run.wandb_mode)
     if H.run.enable_visdom:
         train_kwargs['vis'] = visdom.Visdom(server=H.run.visdom_server, port=H.run.visdom_port)
     
@@ -152,40 +152,24 @@ def main(argv):
     vqgan = vqgan.to(device)
     vqgan_ema = vqgan_ema.to(device)
 
-    if H.data.dataset == 'bags':
-        from utils.dataloader import BagXRay_dataset
-        train_dataset = BagXRay_dataset(data_dir=H.data.data_dir, train=True,
-                                        scale=H.data.img_size, 
-                                        types=H.data.types,
-                                        direction=H.data.direction,
-                                        degrees=H.data.degrees)
-        test_dataset = BagXRay_dataset(data_dir=H.data.data_dir, train=False,
-                                       scale=H.data.img_size, 
-                                       types=H.data.types,
-                                       direction=H.data.direction,
-                                       degrees=H.data.degrees)
-    elif H.data.dataset == 'shrec16':
-        from utils.dataloader import Dataset2D
-        train_dataset = Dataset2D(data_dir=H.data.data_dir, train=True, scale=H.data.img_size)
-        test_dataset = Dataset2D(data_dir=H.data.data_dir, train=False, scale=H.data.img_size)
-    elif H.data.dataset == 'chest' or 'knee':
-        from utils.dataloader import XRay_dataset
-        train_dataset = XRay_dataset(data_dir=H.data.data_dir, train=True, scale=H.data.img_size, 
-                                     projections=H.data.num_xrays, dataset=H.data.dataset,
-                                     use_synthetic=H.data.use_synthetic)
-        test_dataset = XRay_dataset(data_dir=H.data.data_dir, train=False, scale=H.data.img_size, 
-                                    projections=H.data.num_xrays, dataset=H.data.dataset,
-                                    use_synthetic=H.data.use_synthetic)
+    if H.data.loader == "bagxray":
+        train_dataset = BagXRay_dataset(data_dir=H.data.data_dir, train=True, scale=H.data.img_size, 
+                                    degrees=H.data.degrees)
+
+        test_dataset = BagXRay_dataset(data_dir=H.data.data_dir, train=False, scale=H.data.img_size, 
+                                    degrees=H.data.degrees)
     else:
-        raise Exception("Dataset not supported!")
-    workers = 2 if H.train.batch_size <= 32 else 4
+        train_dataset = XRay_dataset(data_dir=H.data.data_dir, train=True, scale=H.data.img_size, 
+                                    projections=H.data.num_xrays)
+
+        test_dataset = XRay_dataset(data_dir=H.data.data_dir, train=False, scale=H.data.img_size, 
+                                    projections=H.data.num_xrays)
 
     train_loader = DataLoader(train_dataset, batch_size=H.train.batch_size, shuffle=True, 
-                              num_workers=workers, pin_memory=True, drop_last=True)
-
+                              num_workers=4, pin_memory=True, drop_last=True)
     # TODO: Fix evaluation step to work with different sized batches so we can set drop_last here to False
-    test_loader = DataLoader(test_dataset, batch_size=H.train.test_batch_size, shuffle=True, 
-                             num_workers=workers, pin_memory=True, drop_last=True) 
+    test_loader = DataLoader(test_dataset, batch_size=H.train.batch_size, shuffle=True, 
+                             num_workers=4, pin_memory=True, drop_last=True) 
     
     optim = torch.optim.Adam(vqgan.ae.parameters(), lr=H.optimizer.learning_rate)
     d_optim = torch.optim.Adam(vqgan.disc.parameters(), lr=H.optimizer.learning_rate)

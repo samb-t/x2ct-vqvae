@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import DataLoader
+from einops import rearrange
 import numpy as np
 
 import wandb
@@ -49,7 +50,7 @@ def train(H, vqgan, vqgan_ema, train_loader, test_loader, optim, d_optim, start_
     tracked_stats["latent_ids"] = []
     test_tracked_stats = defaultdict(lambda: np.array([]))
     end_time = time.time()
-    while global_step <= H.train.total_steps:
+    while True:
         for data in train_loader:
             x = data["ct"]
             start_time = time.time()
@@ -72,11 +73,11 @@ def train(H, vqgan, vqgan_ema, train_loader, test_loader, optim, d_optim, start_
             
             elif H.train.gan_training_mode == "alternating":
                 # Update discriminator
-                x_hat, d_stats, stats = None, dict(), dict()
-                if global_step > H.model.disc_start_step:
+                x_hat, d_stats = None, dict()
+                if global_step > H.train.disc_start_step:
                     with torch.cuda.amp.autocast(enabled=H.train.amp):
                         x_hat, d_stats = vqgan.train_discriminator_iter(global_step, x)
-                    update_model_weights(d_optim, d_stats['d_loss'], amp=H.train.amp, scaler=d_scaler)
+                    update_model_weights(d_optim, stats['d_loss'], amp=H.train.amp, scaler=d_scaler)
                 
                 # Update generator
                 with torch.cuda.amp.autocast(enabled=H.train.amp):
@@ -144,7 +145,7 @@ def main(argv):
     train_kwargs = {}
 
     # wandb can be disabled by passing in --config.run.wandb_mode=disabled
-    wandb.init(name=H.run.experiment, project=H.run.name, config=flatten_collection(H), save_code=True, dir=H.run.wandb_dir, mode=H.run.wandb_mode)
+    wandb.init(project=H.run.name, config=flatten_collection(H), save_code=True, dir=H.run.wandb_dir, mode=H.run.wandb_mode)
     if H.run.enable_visdom:
         train_kwargs['vis'] = visdom.Visdom(server=H.run.visdom_server, port=H.run.visdom_port)
     
@@ -158,30 +159,21 @@ def main(argv):
 
     vqgan = vqgan.to(device)
     vqgan_ema = vqgan_ema.to(device)
-    
-    workers = 4 if H.train.batch_size > 8 else 2
 
-    if H.data.dataset == 'bags':
-        from utils.dataloader import BagCT_dataset
-        train_dataset = BagCT_dataset(data_dir=H.data.data_dir, train=True, scale=H.data.img_size, scale_ct=H.data.scale_ct, use_f16=H.data.f16)
-        test_dataset = BagCT_dataset(data_dir=H.data.data_dir, train=False, scale=H.data.img_size, scale_ct=H.data.scale_ct, use_f16=H.data.f16)
-    elif H.data.dataset == 'shrec16':
-        from utils.dataloader import Dataset3D
-        train_dataset = Dataset3D(data_dir=H.data.data_dir, load_res=H.data.load_res, train=True, scale=H.data.img_size, scale_ct=H.data.scale_ct, use_f16=H.data.f16)
-        test_dataset = Dataset3D(data_dir=H.data.data_dir, load_res=H.data.load_res, train=False, scale=H.data.img_size, scale_ct=H.data.scale_ct, use_f16=H.data.f16)
-    elif H.data.dataset == 'chest' or 'knee':
-        from utils.dataloader import CT_dataset
-        train_dataset = CT_dataset(data_dir=H.data.data_dir, load_res=H.data.load_res, train=True, scale=H.data.img_size, dataset=H.data.dataset, scale_ct=H.data.scale_ct, use_f16=H.data.f16)
-        test_dataset = CT_dataset(data_dir=H.data.data_dir, load_res=H.data.load_res, train=False, scale=H.data.img_size, dataset=H.data.dataset, scale_ct=H.data.scale_ct, use_f16=H.data.f16)
+    if H.data.loader == "bagct":
+        train_dataset = BagCT_dataset(data_dir=H.data.data_dir, train=True, scale=H.data.img_size, cupy=False)
+        test_dataset = BagCT_dataset(data_dir=H.data.data_dir, train=False, scale=H.data.img_size, cupy=False)
     else:
-        raise Exception("Dataset not supported!")
-        
+        train_dataset = CT_dataset(data_dir=H.data.data_dir, load_res=H.data.load_res, train=True, scale=H.data.img_size)
+        test_dataset = CT_dataset(data_dir=H.data.data_dir, load_res=H.data.load_res, train=False, scale=H.data.img_size)
+    
     train_loader = DataLoader(train_dataset, batch_size=H.train.batch_size, shuffle=True, 
-                              num_workers=workers, pin_memory=True, drop_last=True)
+                              num_workers=4, pin_memory=True, drop_last=True)
 
+    
     # TODO: Fix evaluation step to work with different sized batches so we can set drop_last here to False
-    test_loader = DataLoader(test_dataset, batch_size=H.train.test_batch_size, shuffle=True, 
-                             num_workers=workers, pin_memory=True, drop_last=True)
+    test_loader = DataLoader(test_dataset, batch_size=H.train.batch_size, shuffle=True, 
+                             num_workers=4, pin_memory=True, drop_last=True) 
     
     optim = torch.optim.Adam(vqgan.ae.parameters(), lr=H.optimizer.learning_rate)
     d_optim = torch.optim.Adam(vqgan.disc.parameters(), lr=H.optimizer.learning_rate)
