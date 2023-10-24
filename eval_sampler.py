@@ -131,32 +131,24 @@ def main(argv):
 
     sampler = sampler.eval()
 
-    if H.data.dataset == 'bags':
+    if H.data.loader == 'bagct':
         from utils.dataloader import BagXCT_dataset
         test_dataset = BagXCT_dataset(data_dir=H.data.data_dir, train=False, 
-                                       xray_scale=H.xray_config.data.img_size, 
-                                       ct_scale=H.ct_config.data.img_size,
-                                       direction='both',
-                                       types='grayscale',      
-                                       load_res=H.data.load_res,
-                                       cupy=H.data.cupy)
+                                          xray_scale=H.xray_config.data.img_size, 
+                                          ct_scale=H.ct_config.data.img_size)
     else:
         from utils.dataloader import XCT_dataset
         test_dataset = XCT_dataset(data_dir=H.data.data_dir, train=False, 
-                                       xray_scale=H.xray_config.data.img_size, 
-                                       ct_scale=H.ct_config.data.img_size ,
-                                       projections=H.data.num_xrays, 
-                                       load_res=H.data.load_res,
-                                       dataset=H.data.dataset,
-                                       cupy=H.data.cupy,
-                                       use_synthetic=H.data.use_synthetic)
+                                   xray_scale=H.xray_config.data.img_size, 
+                                   scale=H.ct_config.data.img_size ,
+                                   projections=H.data.num_xrays, 
+                                   load_res=H.data.load_res)
 
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, 
                              num_workers=0, pin_memory=True, drop_last=False)
 
     test_dataloader = iter(test_loader)
 
-    print("LEN: ", len(test_loader))
     evaluate(H, sampler, generator_ct,
              test_latent_loader, test_dataloader, outputs_dir)
 

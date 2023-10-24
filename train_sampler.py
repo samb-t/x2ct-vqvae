@@ -179,20 +179,19 @@ def main(argv):
         if H.data.loader == "bagct":
             train_dataset = BagXCT_dataset(data_dir=H.data.data_dir, train=True, 
                                            xray_scale=H.xray_config.data.img_size, 
-                                           ct_scale=H.ct_config.data.img_size,
-                                           train_on_all_angles=H.model.train_on_all_angles)
+                                           ct_scale=H.ct_config.data.img_size)
             test_dataset = BagXCT_dataset(data_dir=H.data.data_dir, train=False, 
                                           xray_scale=H.xray_config.data.img_size, 
                                           ct_scale=H.ct_config.data.img_size)
         else:
             train_dataset = XCT_dataset(data_dir=H.data.data_dir, train=True, 
                                         xray_scale=H.xray_config.data.img_size, 
-                                        ct_scale=H.ct_config.data.img_size,
+                                        scale=H.ct_config.data.img_size,
                                         projections=H.data.num_xrays, 
                                         load_res=H.data.load_res)
             test_dataset = XCT_dataset(data_dir=H.data.data_dir, train=False, 
                                         xray_scale=H.xray_config.data.img_size, 
-                                        ct_scale=H.ct_config.data.img_size ,
+                                        scale=H.ct_config.data.img_size ,
                                         projections=H.data.num_xrays, 
                                         load_res=H.data.load_res)
         train_loader = DataLoader(train_dataset, batch_size=1, shuffle=False, 
