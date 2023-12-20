@@ -25,11 +25,12 @@ def get_config():
     ############################# DATA CONFIG #############################
     #######################################################################
     config.data = data = ConfigDict()
-    data.data_dir = '/home2/datasets/baggage/lidc'
+    data.data_dir = '/projects/cgw/medical/nhs_knee'
     data.img_size = FieldReference(256)
     data.num_xrays = 2
     data.channels = 1
     data.dataset = 'chest'
+    data.aug_prob = 0.0
     data.use_synthetic =  False
 
     #######################################################################
@@ -45,10 +46,11 @@ def get_config():
     #   the discriminator is orders of magnitude faster than the generator
     #   I have set it up so the discriminator is updated first meaning that
     #   for each batch, the generator only has to be evaluated once.
-    train.gan_training_mode = "together"
+    train.total_steps = 100000
+    train.gan_training_mode = "alternating"
     # Whether to use automatic mixed precision. For VQGAN can be worse 
     # with small batches
-    train.amp = True
+    train.amp = False
     train.batch_size = FieldReference(16)
     train.test_batch_size = FieldReference(8)
     # How often to plot new loss values to graphs
@@ -63,6 +65,9 @@ def get_config():
     train.ema_update_every = 10
     train.ema_decay = 0.995
     train.load_step = 0
+    # Adaptive Pseudo Augmentation params
+    train.apa_threshold = 0.4
+    train.apa_max_prob = 0.2
 
     #######################################################################
     ############################# MODEL CONFIG ############################
@@ -72,8 +77,9 @@ def get_config():
     model.name = "2d_vqgan"
     # Differential Augmentation options to be put in one string split by commas. Currently in ['translation', 'cutout', 'color']
     # Think I've seen a paper showing that spatial augmentations seem to be more useful than colour augmentations
-    model.diffaug_policy = 'translation,cutout'
-    # use ada framework (arxiv.org/abs/2006.06676) for data augmentations instead of diffaug
+    model.diffaug_policy = 'color,translation,geometric'
+    # Whether to apply Adaptive Discriminator Augmentation from StyleGAN2-ADA.
+    # If True, diffaug won't be used
     model.ada = True
     # Vector Quantizer module. Currently in ['nearest', 'gumbel']
     model.quantizer = 'nearest'
@@ -89,12 +95,10 @@ def get_config():
     model.emb_dim = 256
     # Spatial size of latents
     model.latent_shape = [1, 16, 16]
-    # Number of layers in the discriminator. TODO: Check this against more recent papers since it is fiarly small
-    model.disc_layers = 3
     # Adaptive weight limit. Found to improve stability in Unleashing Transformers
     model.disc_weight_max = 1.0
     # What step to start using the discriminator
-    model.disc_start_step = 30001
+    model.disc_start_step = 1
     # Base number of filters in the discriminator
     model.ndf = 64
     # Base number of filters in the autoencoder
@@ -107,6 +111,8 @@ def get_config():
     # Whether to use perceptual loss. Not sure how effective this would be for X-Rays. 
     # It might make it look better to the eye but is that a good thing?
     model.perceptual_loss = False
+    model.perceptual_weight = 1.0
+    model.sampler_load_step = 100000
 
     #######################################################################
     ########################### OPTIMIZER CONFIG ##########################
