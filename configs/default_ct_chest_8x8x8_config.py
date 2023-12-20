@@ -47,12 +47,12 @@ def get_config():
     #   the discriminator is orders of magnitude faster than the generator
     #   I have set it up so the discriminator is updated first meaning that
     #   for each batch, the generator only has to be evaluated once.
-    train.gan_training_mode = "together"
+    train.gan_training_mode = "alternating"
     # Whether to use automatic mixed precision. For VQGAN can be worse 
     # especially with small batches
     train.amp = True
-    train.batch_size = FieldReference(2)
-    train.test_batch_size = FieldReference(12)
+    train.batch_size = FieldReference(6)
+    train.test_batch_size = FieldReference(4)
     # How often to plot new loss values to graphs
     train.plot_graph_steps = 100
     # How often to plot reconstruction images
@@ -78,7 +78,7 @@ def get_config():
     # Think I've seen a paper showing that spatial augmentations seem to be more useful than colour augmentations
     model.diffaug_policy = 'translation,cutout'
     # use ada framework (arxiv.org/abs/2006.06676) for data augmentations instead of diffaug
-    model.ada = False
+    model.ada = True
     # Vector Quantizer module. Currently in ['nearest', 'gumbel']
     model.quantizer = 'nearest'
     # Vector Quantizer commitment loss
