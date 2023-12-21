@@ -42,7 +42,7 @@ To train the diffusion model install flash attention from the instructions [here
 
 ## Datasets
 
-We use the publicly available [LIDC-IDRI dataset](https://wiki.cancerimagingarchive.net/pages/viewpage.action?pageId=1966254) and preprocess the CT scans following the instructions in the [X2CT-GAN repo](https://github.com/kylekma/X2CT). We resample the voxel grids into a 256x256x256 resolution with a data type of float16 for fast loading. For the 2D projections we used Plastimatch and followed the instructions in the [MedNeRF repo](https://github.com/abrilcf/mednerf) setting a wider Hounsfield unit range of -1,000 HU to +1,000 HU.
+We use the publicly available [LIDC-IDRI dataset](https://wiki.cancerimagingarchive.net/pages/viewpage.action?pageId=1966254) and preprocess the CT scans following the instructions in the [X2CT-GAN repo](https://github.com/kylekma/X2CT). We resample the voxel grids into a 128x128x128 resolution with a data type of float16 for fast loading. For the 2D projections we used Plastimatch and followed the instructions in the [MedNeRF repo](https://github.com/abrilcf/mednerf) setting a wider Hounsfield unit range of -1,000 HU to +1,000 HU.
 
 We still have no plans for releasing the baggage security screening data. However this will be considered in the future.
 
