@@ -11,7 +11,7 @@ def get_config():
     # Name for set of experiments in wandb
     run.name = 'xray-vqgan'
     # Creates a separate log subfolder for each experiment
-    run.experiment = 'default'
+    run.experiment = 'chest'
     run.wandb_dir = ''
     # Set this to 'disabled' to disable wandb logging
     run.wandb_mode = 'online'
@@ -25,12 +25,11 @@ def get_config():
     ############################# DATA CONFIG #############################
     #######################################################################
     config.data = data = ConfigDict()
-    data.data_dir = '/projects/cgw/medical/nhs_knee'
+    data.data_dir = '/home2/datasets/baggage/lidc'
     data.img_size = FieldReference(256)
     data.num_xrays = 2
     data.channels = 1
     data.dataset = 'chest'
-    data.aug_prob = 0.0
     data.use_synthetic =  False
 
     #######################################################################
@@ -46,11 +45,10 @@ def get_config():
     #   the discriminator is orders of magnitude faster than the generator
     #   I have set it up so the discriminator is updated first meaning that
     #   for each batch, the generator only has to be evaluated once.
-    train.total_steps = 100000
     train.gan_training_mode = "alternating"
     # Whether to use automatic mixed precision. For VQGAN can be worse 
     # with small batches
-    train.amp = False
+    train.amp = True
     train.batch_size = FieldReference(16)
     train.test_batch_size = FieldReference(8)
     # How often to plot new loss values to graphs
@@ -67,7 +65,8 @@ def get_config():
     train.load_step = 0
     # Adaptive Pseudo Augmentation params
     train.apa_threshold = 0.4
-    train.apa_max_prob = 0.2
+    train.apa_max_prob = 0.1
+    train.total_steps = 100000
 
     #######################################################################
     ############################# MODEL CONFIG ############################
@@ -77,10 +76,13 @@ def get_config():
     model.name = "2d_vqgan"
     # Differential Augmentation options to be put in one string split by commas. Currently in ['translation', 'cutout', 'color']
     # Think I've seen a paper showing that spatial augmentations seem to be more useful than colour augmentations
-    model.diffaug_policy = 'color,translation,geometric'
+    model.diffaug_policy = 'translation,cutout'
     # Whether to apply Adaptive Discriminator Augmentation from StyleGAN2-ADA.
     # If True, diffaug won't be used
     model.ada = True
+    # Use progressive self-supervisded Discriminator based on FastGAN (https://github.com/odegeasslbc/FastGAN-pytorch)
+    # architecture params are fixed
+    model.disc_progressive = True
     # Vector Quantizer module. Currently in ['nearest', 'gumbel']
     model.quantizer = 'nearest'
     # Vector Quantizer commitment loss
@@ -95,10 +97,12 @@ def get_config():
     model.emb_dim = 256
     # Spatial size of latents
     model.latent_shape = [1, 16, 16]
+    # Number of layers in the discriminator. TODO: Check this against more recent papers since it is fiarly small
+    model.disc_layers = 3
     # Adaptive weight limit. Found to improve stability in Unleashing Transformers
     model.disc_weight_max = 1.0
     # What step to start using the discriminator
-    model.disc_start_step = 1
+    model.disc_start_step = 0
     # Base number of filters in the discriminator
     model.ndf = 64
     # Base number of filters in the autoencoder
@@ -110,7 +114,7 @@ def get_config():
     model.gumbel_straight_through = False
     # Whether to use perceptual loss. Not sure how effective this would be for X-Rays. 
     # It might make it look better to the eye but is that a good thing?
-    model.perceptual_loss = False
+    model.perceptual_loss = True
     model.perceptual_weight = 1.0
     model.sampler_load_step = 100000
 

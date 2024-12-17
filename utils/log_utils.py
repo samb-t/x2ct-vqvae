@@ -78,12 +78,12 @@ def save_model(model, model_save_name, step, log_dir):
     log_dir = "logs/" + log_dir + "/saved_models"
     os.makedirs(log_dir, exist_ok=True)
     model_name = f"{model_save_name}_{step}.th"
-    log(f"Saving {model_save_name} to {model_save_name}_{str(step)}.th")
+    log(f"Saving {model_save_name} to {model_save_name}_{str(step)}.th under {log_dir}")
     torch.save(model.state_dict(), os.path.join(log_dir, model_name))
 
 
 def load_model(model, model_load_name, step, log_dir, strict=False):
-    log(f"Loading {model_load_name}_{str(step)}.th")
+    log(f"Loading {model_load_name}_{str(step)}.th from {log_dir}")
     log_dir = "logs/" + log_dir + "/saved_models"
     try:
         model.load_state_dict(

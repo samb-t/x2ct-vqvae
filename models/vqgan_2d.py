@@ -1,14 +1,14 @@
 '''
-VQGAN code, originally from Unleashing Transformers
+VQGAN code, originally from Taming Transformers, adapted for Unleashing Transformers
 '''
 
-import lpips
 import numpy as np
 import torch
+import lpips
 import torch.nn as nn
+import random
 import torch.nn.functional as F
-from .diffaug import DiffAugment
-from utils.vqgan_utils import normalize, swish, adopt_weight, hinge_d_loss, calculate_adaptive_weight
+from utils.vqgan_utils import normalize, swish, adopt_weight, hinge_d_loss, calculate_adaptive_weight, AdaptivePseudoAugment
 from utils.log_utils import log
 
 
@@ -16,25 +16,36 @@ class VQGAN(nn.Module):
     def __init__(self, H):
         super().__init__()
         self.ae = VQAutoEncoder(H)
-        self.disc = Discriminator(
-            H.data.channels,
-            H.model.ndf,
-            n_layers=H.model.disc_layers
-        )
+        self.progressive_d = H.model.disc_progressive
+        if self.progressive_d:
+            from .discriminator import Discriminator2D
+            self.disc = Discriminator2D(
+                nc=H.data.channels,
+            )
+        else:
+            self.disc = Discriminator(
+                H.data.channels,
+                H.model.ndf,
+                n_layers=H.model.disc_layers
+            )
+        # Adaptive Pseudo Augmentation
+        # from paper: https://github.com/tsubota-kouga/ProjectedGAN
+        self.APA = AdaptivePseudoAugment(threshold=H.train.apa_threshold,
+                                         max_prob=H.train.apa_max_prob)
         self.perceptual = None
-        self.disc_start_step = H.model.disc_start_step
-        self.disc_weight_max = H.model.disc_weight_max
-
         if H.model.perceptual_loss:
             self.perceptual = lpips.LPIPS(net="vgg")
             self.perceptual_weight = H.model.perceptual_weight
+        self.disc_start_step = H.model.disc_start_step
+        self.disc_weight_max = H.model.disc_weight_max
         if H.model.ada:
-            from .ada_2d import AdaptiveDiscriminatorAugmentation
-            self.disc = AdaptiveDiscriminatorAugmentation(self.disc)
+            from .ada import AdaptiveDiscriminatorAugmentation
+            self.disc = AdaptiveDiscriminatorAugmentation(self.disc, use_3d=False, progressive_d=self.progressive_d)
             self.diffaug_policy = ''
         else:
             from .diffaug import DiffAugment
             self.diffaug_policy = H.model.diffaug_policy
+
 
     def train_iter_together(self, x, step):
         """
@@ -43,6 +54,7 @@ class VQGAN(nn.Module):
         and actually train the GAN iteritvely rathen than effectively with one optimiser 
         in conjunction with .detach()
         """
+        batch_size = x.shape[0]
         stats = {}
         # update gumbel softmax temperature based on step. Anneal from 1 to 1/16 over 150000 steps
         if self.ae.quantizer_type == "gumbel":
@@ -64,12 +76,10 @@ class VQGAN(nn.Module):
         if self.diffaug_policy != '':
             x_hat_pre_aug = x_hat.detach().clone()
             x_hat = DiffAugment(x_hat, policy=self.diffaug_policy)
-        else:
-            logits_real = self.disc(x)
-            logits_fake = self.disc(x_hat.contiguous().detach())
-
-        # update generator
+        
         logits_fake = self.disc(x_hat)
+        
+        # update generator
         g_loss = -torch.mean(logits_fake)
         last_layer = self.ae.generator.blocks[-1].weight
         d_weight = calculate_adaptive_weight(nll_loss, g_loss, last_layer, self.disc_weight_max)
@@ -89,11 +99,19 @@ class VQGAN(nn.Module):
         if "mean_distance" in stats:
             stats["mean_code_distance"] = quant_stats["mean_distance"]
         if step > self.disc_start_step:
+            # use APA
+            num_mix_fakes = (torch.rand(batch_size) < self.APA.init_prob).sum().item()
+            if num_mix_fakes > 0:
+                x = torch.cat([x[:batch_size - num_mix_fakes],
+                               x_hat[:num_mix_fakes]])
             if self.diffaug_policy != '':
                 logits_real = self.disc(DiffAugment(x.contiguous().detach(), policy=self.diffaug_policy))
+                logits_fake = self.disc(x_hat.contiguous().detach())  # detach so that generator isn"t also updated
             else:
-                logits_real = self.disc(x.contiguous().detach())
-            logits_fake = self.disc(x_hat.contiguous().detach())  # detach so that generator isn"t also updated
+                logits_real = self.disc(x)
+                logits_fake = self.disc(x_hat.contiguous().detach())
+
+            self.APA.update_lambdas(batch_size, num_mix_fakes, logits_real, logits_fake)
             d_loss = hinge_d_loss(logits_real, logits_fake)
             stats["d_loss"] = d_loss
 
@@ -105,14 +123,27 @@ class VQGAN(nn.Module):
     def train_discriminator_iter(self, step, x):
         stats = {}
         x_hat, codebook_loss, quant_stats = self.ae(x)
+        batch_size = x.shape[0]
+        num_mix_fakes = (torch.rand(batch_size) < self.APA.init_prob).sum().item()
+        if num_mix_fakes > 0:
+            x = torch.cat([x[:batch_size - num_mix_fakes],
+                           x_hat[:num_mix_fakes]])
         if self.diffaug_policy != '':
             logits_real = self.disc(DiffAugment(x, policy=self.diffaug_policy))
             logits_fake = self.disc(DiffAugment(x_hat.contiguous().detach(), policy=self.diffaug_policy))
         else:
-            # use ada
-            logits_real = self.disc(x)
+            # use ADA
+            if self.progressive_d:
+                part = random.randint(0, 3)
+                logits_real, [rec_all, rec_part] = self.disc(x, is_fake=False, part=part)
+                rec_err = self.perceptual( rec_all, F.interpolate(x, rec_all.shape[2]) ).sum() +\
+                    self.perceptual( rec_part, F.interpolate(self.crop_image_by_part(x, part), rec_part.shape[2]) ).sum()
+            else:
+                logits_real = self.disc(x, is_fake=False)
+                rec_err = torch.tensor(0.)
             logits_fake = self.disc(x_hat.contiguous().detach(), is_fake=True) # detach so that generator isn"t also updated
-        d_loss = hinge_d_loss(logits_real, logits_fake)
+        self.APA.update_lambdas(batch_size, num_mix_fakes, logits_real, logits_fake)
+        d_loss = hinge_d_loss(logits_real, logits_fake) + rec_err
         stats["d_loss"] = d_loss
         stats["codebook_loss"] = codebook_loss
         stats["latent_ids"] = quant_stats["min_encoding_indices"].squeeze(1).reshape(x.shape[0], -1)
@@ -145,12 +176,14 @@ class VQGAN(nn.Module):
             nll_loss = recon_loss
         nll_loss = torch.mean(nll_loss)
 
-        x_hat_pre_aug = x_hat.detach().clone()
         # augment for input to discriminator
         if self.diffaug_policy != '':
-            logits_fake = self.disc(DiffAugment(x_hat, policy=self.diffaug_policy))
+            x_hat_pre_aug = x_hat.detach().clone()
+            x_hat = DiffAugment(x_hat, policy=self.diffaug_policy)
+            logits_fake = self.disc(x_hat)
         else:
             # use ada
+            x_hat_pre_aug = x_hat.detach().clone()
             logits_fake = self.disc(x_hat, is_fake=True)
 
         # update generator
@@ -194,7 +227,7 @@ class VQGAN(nn.Module):
         nll_loss = torch.mean(nll_loss)
 
         # update generator
-        logits_fake = self.disc(x_hat)
+        logits_fake = self.disc(x_hat, is_fake=True)
         g_loss = -torch.mean(logits_fake)
 
         stats["val_l1"] = recon_loss.mean()
@@ -221,6 +254,18 @@ class VQGAN(nn.Module):
         x_hat = mu + 0.5*torch.exp(logsigma)*torch.randn_like(logsigma)
 
         return x_hat, stats
+
+    def crop_image_by_part(self, image, part):
+        hw = image.shape[2]//2
+        if part==0:
+            return image[:,:,:hw,:hw]
+        if part==1:
+            return image[:,:,:hw,hw:]
+        if part==2:
+            return image[:,:,hw:,:hw]
+        if part==3:
+            return image[:,:,hw:,hw:]
+        
 
 class VQAutoEncoder(nn.Module):
     def __init__(self, H):
@@ -399,8 +444,9 @@ class Discriminator(nn.Module):
             nn.Conv2d(ndf * ndf_mult, 1, kernel_size=4, stride=1, padding=1)]  # output 1 channel prediction map
         self.main = nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward(self, x, label=None, part=None):
         return self.main(x)
+
 
 # Define VQVAE classes
 class VectorQuantizer(nn.Module):

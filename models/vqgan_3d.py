@@ -2,94 +2,96 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .diffaug_3d import DiffAugment, rand_cutout
-from utils.vqgan_utils import normalize, swish, adopt_weight, hinge_d_loss, calculate_adaptive_weight
+from .diffaug_3d import DiffAugment
+from utils.vqgan_utils import normalize, swish, adopt_weight, hinge_d_loss, calculate_adaptive_weight, AdaptivePseudoAugment, Mish, smooth_l1_loss
 from utils.log_utils import log
 from einops import rearrange
-
-def normalize_tensor(in_feat,eps=1e-10):
-    norm_factor = torch.sqrt(torch.sum(in_feat**2,dim=1,keepdim=True))
-    return in_feat/(norm_factor+eps)
-
-def activations_difference(acts1, acts2):
-    val = 0
-    for act1, act2 in zip(acts1, acts2):
-        act1 = normalize_tensor(act1)
-        act2 = normalize_tensor(act2)
-        diff = (act1 - act2) ** 2
-        diff = diff.mean(dim=(1,2,3,4))
-        val += diff
-    return torch.mean(val)
 
 class VQGAN(nn.Module):
     def __init__(self, H):
         super().__init__()
         self.ae = VQAutoEncoder(H)
-        self.disc = Discriminator(
-            H.data.channels,
-            H.model.ndf,
-            n_layers=H.model.disc_layers
-        )
+        self.progressive_d = H.model.disc_progressive
+        if self.progressive_d:
+            from .discriminator import Discriminator3D
+            self.disc = Discriminator3D(
+                nc=H.data.channels,
+            )
+        else:
+            self.disc = Discriminator(
+                H.data.channels,
+                H.model.ndf,
+                n_layers=H.model.disc_layers
+            )
+        # Adaptive Pseudo Augmentation
+        # from paper: https://github.com/tsubota-kouga/ProjectedGAN
+        self.APA = AdaptivePseudoAugment(threshold=H.train.apa_threshold, max_prob=H.train.apa_max_prob)
+        if H.model.aw:
+            from utils.aw_loss import aw_method
+            # Adaptive Weighted Discriminator
+            # from paper: https://github.com/vasily789/adaptive-weighted-gans
+            self.AW = aw_method()
+        else:
+            self.AW = None
         self.disc_start_step = H.model.disc_start_step
         self.disc_weight_max = H.model.disc_weight_max
-        self.diffaug_policy = H.model.diffaug_policy
-        self.recon_weight = H.model.recon_weight
-        self.pre_augmentation = H.model.pre_augmentation
-        self.perceptual_loss = H.model.perceptual_loss
-        self.perceptual_weight = H.model.perceptual_weight
-
         if H.model.ada:
-            from .ada_3d import AdaptiveDiscriminatorAugmentation
-            self.disc = AdaptiveDiscriminatorAugmentation(self.disc)
+            from .ada import AdaptiveDiscriminatorAugmentation
+            self.disc = AdaptiveDiscriminatorAugmentation(self.disc, use_3d=True, progressive_d=H.model.disc_progressive)
             self.diffaug_policy = ''
         else:
             from .diffaug import DiffAugment
             self.diffaug_policy = H.model.diffaug_policy
+        self.recon_weight = H.model.recon_weight
+        self.density_threshold_delta = None
+        if H.train.recon_loss == 'L1':
+            self.recon_loss_fn = nn.L1Loss()
+        elif H.train.recon_loss == 'L2':
+            self.recon_loss_fn = nn.MSELoss()
+        elif H.train.recon_loss == 'Charbonnier':
+            from utils.vqgan_utils import CharbonnierLoss
+            self.recon_loss_fn = CharbonnierLoss()
+        elif H.train.recon_loss == 'DensityLoss':
+            from utils.vqgan_utils import DensityLoss
+            self.recon_loss_fn = DensityLoss(threshold=H.train.density_threshold)
+            self.density_threshold_delta = 0.0
 
+        
 
     def train_iter_together(self, x, step):
         stats = {}
+        batch_size = x.shape[0]
         # update gumbel softmax temperature based on step. Anneal from 1 to 1/16 over 150000 steps
         if self.ae.quantizer_type == "gumbel":
             self.ae.quantize.temperature = max(1/16, ((-1/160000) * step) + 1)
             stats["gumbel_temp"] = self.ae.quantize.temperature
-        
-        if self.pre_augmentation:
-            x = rand_cutout(x, ratio=0.25, apply_ratio=0.9)
 
         x_hat, codebook_loss, quant_stats = self.ae(x)
 
-        # get recon loss
-        recon_loss = torch.abs(x.contiguous() - x_hat.contiguous())  # L1 loss
-        nll_loss = recon_loss 
-        nll_loss = torch.mean(nll_loss)
+        # get recon/perceptual loss
+        recon_loss = self.recon_loss_fn(x_hat.contiguous(), x.contiguous())
+        nll_loss = torch.mean(torch.abs(x.contiguous() - x_hat.contiguous()))
+        #nll_loss = smooth_l1_loss(x_hat.contiguous(), x.contiguous())
 
         # augment for input to discriminator
         if self.diffaug_policy != '':
-            x_hat_pre_aug = x_hat#.detach().clone()
+            x_hat_pre_aug = x_hat.detach().clone()
             x_hat = DiffAugment(x_hat, policy=self.diffaug_policy)
+            logits_fake = self.disc(x_hat)
+        else:
+            # use ADA
+            logits_fake = self.disc(x_hat, is_fake=True)
 
         # update generator
-        logits_fake, fake_activations = self.disc(x_hat)
+        logits_fake = self.disc(x_hat)
         g_loss = -torch.mean(logits_fake)
         last_layer = self.ae.generator.blocks[-1].weight
         d_weight = calculate_adaptive_weight(nll_loss, g_loss, last_layer, self.disc_weight_max)
         d_weight *= adopt_weight(1, step, self.disc_start_step)
-        loss = self.recon_weight * nll_loss + d_weight * g_loss + codebook_loss
-    
-        if self.perceptual_loss:
-            if self.diffaug_policy != '':
-                # redo activations without augmentations
-                _, fake_activations = self.disc(x_hat_pre_aug)
-            # No nead to pass grads though to the discriminator to change features for ground truth
-            with torch.no_grad():
-                _, real_activations = self.disc(x.contiguous().detach())
-            perceptual_loss = activations_difference(fake_activations, real_activations)
-            loss += self.perceptual_weight * perceptual_loss
-            stats["perceptual_loss"] = perceptual_loss
+        loss = nll_loss + d_weight * g_loss + codebook_loss
 
         stats["loss"] = loss
-        stats["l1"] = recon_loss.mean()
+        stats["recon_loss"] = recon_loss.mean()
         stats["nll_loss"] = nll_loss
         stats["g_loss"] = g_loss
         stats["d_weight"] = d_weight
@@ -99,11 +101,15 @@ class VQGAN(nn.Module):
         if "mean_distance" in stats:
             stats["mean_code_distance"] = quant_stats["mean_distance"]
         if step > self.disc_start_step:
+            num_mix_fakes = (torch.rand(batch_size) < self.APA.init_prob).sum().item()
+            if num_mix_fakes > 0:
+                x = torch.cat([x[:batch_size - num_mix_fakes],
+                               x_hat[:num_mix_fakes]])
             if self.diffaug_policy != '':
-                logits_real, _ = self.disc(DiffAugment(x.contiguous().detach(), policy=self.diffaug_policy))
+                logits_real = self.disc(DiffAugment(x.contiguous().detach(), policy=self.diffaug_policy))
             else:
                 logits_real = self.disc(x.contiguous().detach())
-            logits_fake, _ = self.disc(x_hat.contiguous().detach())  # detach so that generator isn"t also updated
+            logits_fake = self.disc(x_hat.contiguous().detach())  # detach so that generator isn"t also updated
             d_loss = hinge_d_loss(logits_real, logits_fake)
             stats["d_loss"] = d_loss
 
@@ -114,14 +120,27 @@ class VQGAN(nn.Module):
     
     def train_discriminator_iter(self, step, x):
         stats = {}
+        batch_size = x.shape[0]
         x_hat, codebook_loss, quant_stats = self.ae(x)
+        num_mix_fakes = (torch.rand(batch_size) < self.APA.init_prob).sum().item()
+        if num_mix_fakes > 0:
+            x = torch.cat([x[:batch_size - num_mix_fakes],
+                           x_hat[:num_mix_fakes]])
         if self.diffaug_policy != '':
-            logits_real, _ = self.disc(DiffAugment(x, policy=self.diffaug_policy))
-            logits_fake, _ = self.disc(DiffAugment(x_hat.contiguous().detach(), policy=self.diffaug_policy))
+            logits_real = self.disc(DiffAugment(x, policy=self.diffaug_policy))
+            logits_fake = self.disc(DiffAugment(x_hat.contiguous().detach(), policy=self.diffaug_policy))
         else:
-            logits_real,_ = self.disc(x)
-            logits_fake,_ = self.disc(x_hat.contiguous().detach()) # detach so that generator isn"t also updated
-        d_loss = hinge_d_loss(logits_real, logits_fake)
+            # use ADA
+            logits_real = self.disc(x, is_fake=False)
+            logits_fake = self.disc(x_hat.contiguous().detach(), is_fake=True) # detach so that generator isn"t also updated
+        
+        self.APA.update_lambdas(batch_size, num_mix_fakes, logits_real, logits_fake)
+        if self.AW is not None:
+            d_loss, stats["d_loss_real"], stats["d_loss_fake"] = hinge_d_loss(logits_real, logits_fake, True)
+            stats["logits_real"] = logits_real
+            stats["logits_fake"] = logits_fake
+        else:
+            d_loss = hinge_d_loss(logits_real, logits_fake)
         stats["d_loss"] = d_loss
         stats["codebook_loss"] = codebook_loss
         stats["latent_ids"] = quant_stats["min_encoding_indices"].squeeze(1).reshape(x.shape[0], -1)
@@ -136,7 +155,7 @@ class VQGAN(nn.Module):
         if self.ae.quantizer_type == "gumbel":
             self.ae.quantize.temperature = max(1/16, ((-1/160000) * step) + 1)
             stats["gumbel_temp"] = self.ae.quantize.temperature
-            
+
         x_hat, codebook_loss, quant_stats = self.ae(x)
 
         stats["codebook_loss"] = codebook_loss
@@ -145,39 +164,35 @@ class VQGAN(nn.Module):
         if "mean_distance" in stats:
             stats["mean_code_distance"] = quant_stats["mean_distance"]
 
-        # get recon/perceptual loss
-        recon_loss = torch.abs(x.contiguous() - x_hat.contiguous())  # L1 loss
-        nll_loss = recon_loss
+        # slowly remove the density weighting of if using density loss as recon loss
+        if step == 50000 and self.density_threshold_delta is not None:
+            self.density_threshold_delta -= 0.0001
+            self.recon_loss_fn.update_threshold(self.density_threshold_delta)
+            
+        recon_loss = self.recon_loss_fn(x_hat.contiguous(), x.contiguous())
+        nll_loss = smooth_l1_loss(x_hat.contiguous(), x.contiguous()) + self.recon_weight * recon_loss
         nll_loss = torch.mean(nll_loss)
 
         # augment for input to discriminator
-        x_hat_pre_aug = x_hat.detach().clone()
         if self.diffaug_policy != '':
-            logits_fake, _ = self.disc(DiffAugment(x_hat, policy=self.diffaug_policy))
+            x_hat_pre_aug = x_hat.detach().clone()
+            x_hat = DiffAugment(x_hat, policy=self.diffaug_policy)
+            logits_fake = self.disc(x_hat)
         else:
-            # use ADA
-            logits_fake, _ = self.disc(x_hat, is_fake=True) # detach so that generator isn't also updated
+            # use ada
+            x_hat_pre_aug = x_hat.detach().clone()
+            logits_fake = self.disc(x_hat, is_fake=True)
 
         # update generator
+        logits_fake = self.disc(x_hat)
         g_loss = -torch.mean(logits_fake)
         last_layer = self.ae.generator.blocks[-1].weight
         d_weight = calculate_adaptive_weight(nll_loss, g_loss, last_layer, self.disc_weight_max)
         d_weight *= adopt_weight(1, step, self.disc_start_step)
-        loss = self.recon_weight * nll_loss + d_weight * g_loss + codebook_loss
-
-        if self.perceptual_loss:
-            if self.diffaug_policy != '':
-                # redo activations without augmentations
-                _, fake_activations = self.disc(x_hat_pre_aug)
-            # No nead to pass grads though to the discriminator to change features for ground truth
-            with torch.no_grad():
-                _, real_activations = self.disc(x.contiguous().detach())
-            perceptual_loss = activations_difference(fake_activations, real_activations)
-            loss += self.perceptual_weight * perceptual_loss
-            stats["perceptual_loss"] = perceptual_loss
+        loss = nll_loss + d_weight * g_loss + codebook_loss
 
         stats["loss"] = loss
-        stats["l1"] = recon_loss.mean()
+        stats["recon_loss"] = recon_loss.mean()
         stats["nll_loss"] = nll_loss
         stats["g_loss"] = g_loss
         stats["d_weight"] = d_weight
@@ -197,15 +212,15 @@ class VQGAN(nn.Module):
         x_hat, codebook_loss, quant_stats = self.ae(x)
 
         # get recon/perceptual loss
-        recon_loss = torch.abs(x.contiguous() - x_hat.contiguous())  # L1 loss
-        nll_loss = recon_loss
+        recon_loss = self.recon_loss_fn(x_hat.contiguous(), x.contiguous())
+        nll_loss = smooth_l1_loss(x_hat.contiguous(), x.contiguous()) + self.recon_weight * recon_loss
         nll_loss = torch.mean(nll_loss)
 
         # update generator
-        logits_fake, _ = self.disc(x_hat)
+        logits_fake = self.disc(x_hat)
         g_loss = -torch.mean(logits_fake)
 
-        stats["val_l1"] = recon_loss.mean()
+        stats["val_recon_loss"] = recon_loss.mean()
         stats["val_nll_loss"] = nll_loss
         stats["val_g_loss"] = g_loss
         stats["val_codebook_loss"] = codebook_loss
@@ -308,7 +323,6 @@ class Encoder(nn.Module):
 
         # non-local attention block
         blocks.append(Block(block_in_ch, block_in_ch))
-        # if curr_res in attn_resolutions:
         blocks.append(AttnBlock(block_in_ch))
         blocks.append(Block(block_in_ch, block_in_ch))
 
@@ -323,7 +337,14 @@ class Encoder(nn.Module):
         return x
 
 class Generator(nn.Module):
-    def __init__(self, in_channels, out_channels, nf, ch_mult, num_res_blocks, resolution, attn_resolutions, resblock_name):
+    def __init__(self, in_channels,
+                    out_channels,
+                    nf,
+                    ch_mult,
+                    num_res_blocks,
+                    resolution,
+                    attn_resolutions,
+                    resblock_name):
         super().__init__()
         num_resolutions = len(ch_mult)
         block_in_ch = nf * ch_mult[-1]
@@ -333,24 +354,16 @@ class Generator(nn.Module):
         # initial conv
         blocks.append(nn.Conv3d(in_channels, block_in_ch, kernel_size=3, stride=1, padding=1))
 
-        resblocks = {
-            "resblock": ResBlock,
-            "depthwise_block": DepthwiseResBlock
-        }
-        Block = resblocks[resblock_name]
-
-
         # non-local attention block
-        blocks.append(Block(block_in_ch, block_in_ch))
-        # if curr_res in attn_resolutions:
+        blocks.append(ResBlock(block_in_ch, block_in_ch))
         blocks.append(AttnBlock(block_in_ch))
-        blocks.append(Block(block_in_ch, block_in_ch))
+        blocks.append(ResBlock(block_in_ch, block_in_ch))
 
         for i in reversed(range(num_resolutions)):
             block_out_ch = nf * ch_mult[i]
 
             for _ in range(num_res_blocks):
-                blocks.append(Block(block_in_ch, block_out_ch))
+                blocks.append(ResBlock(block_in_ch, block_out_ch))
                 block_in_ch = block_out_ch
 
                 if curr_res in attn_resolutions:
@@ -367,10 +380,10 @@ class Generator(nn.Module):
 
         # used for calculating ELBO - fine tuned after training
         self.logsigma = nn.Sequential(
-                            nn.Conv3d(block_in_ch, block_in_ch, kernel_size=3, stride=1, padding=1),
-                            nn.ReLU(),
-                            nn.Conv3d(block_in_ch, in_channels, kernel_size=1, stride=1, padding=0)
-                        )
+            nn.Conv3d(block_in_ch, block_in_ch, kernel_size=3, stride=1, padding=1),
+            Mish(),
+            nn.Conv3d(block_in_ch, in_channels, kernel_size=1, stride=1, padding=0)
+        )
 
     def forward(self, x):
         for block in self.blocks:
@@ -416,12 +429,7 @@ class Discriminator(nn.Module):
         self.main = nn.Sequential(*layers)
 
     def forward(self, x):
-        activations = []
-        for layer in self.main:
-            x = layer(x)
-            if isinstance(layer, nn.LeakyReLU):
-                activations.append(x)
-        return x, activations
+        return self.main(x)
 
 # Define VQVAE classes
 class VectorQuantizer(nn.Module):
@@ -527,6 +535,7 @@ class ResBlock(nn.Module):
 
         return x + x_in
 
+
 class LayerNorm(nn.Module):
     def __init__(self, dim, eps = 1e-5):
         super().__init__()
@@ -561,6 +570,7 @@ class DepthwiseResBlock(nn.Module):
             x_in = self.conv_out(x_in)
         
         return x + x_in
+
 
 class AttnBlock(nn.Module):
     def __init__(self, in_channels):

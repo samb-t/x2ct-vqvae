@@ -9,10 +9,10 @@ def get_config():
     #######################################################################
     config.run = run = ConfigDict()
     # Name for set of experiments in wandb
-    run.name = 'x2ct-absorbing'
+    run.name = 'sampler'
     # Creates a separate log subfolder for each experiment
-    run.experiment = 'default'
-    run.wandb_dir = ''
+    run.experiment = 'chest'
+    run.wandb_dir = 'online'
     # Set this to 'disabled' to disable wandb logging
     run.wandb_mode = 'online'
     # Enables logging to visdom
@@ -25,54 +25,61 @@ def get_config():
     ############################# DATA CONFIG #############################
     #######################################################################
     config.data = data = ConfigDict()
-    data.data_dir = '/projects/cgw/medical/lidc'
-    data.img_size = FieldReference(256)
+    data.data_dir = '/home2/datasets/baggage/lidc'
+    data.img_size = FieldReference(128)
     data.num_xrays = 2
     data.channels = 1
-    data.load_res = 256
+    data.load_res = None
+    data.dataset = 'chest'
+    data.cupy = False
+    data.use_synthetic = False
+    data.loader = "chest"
 
     #######################################################################
     ########################### TRAINING CONFIG ###########################
     #######################################################################
     config.train = train = ConfigDict()
     train.amp = True
-    train.batch_size = FieldReference(32)
+    train.batch_size = FieldReference(4)
     # How often to plot new loss values to graphs
     train.plot_graph_steps = 100
     # How often to plot reconstruction images
-    train.plot_recon_steps = 5000
+    train.plot_recon_steps = 1
     # How often to evaluate on test set
-    train.eval_steps = 10000
+    train.eval_steps = 5000
     # How often to save checkpoints
-    train.checkpoint_steps = 10000
+    train.checkpoint_steps = 5000
     # How often to update ema model params (more often is better but slightly slower)
     train.ema_update_every = 10
     train.ema_decay = 0.995
     # What model step to load
-    train.load_step = 0
+    train.load_step = 45000
     # Number of times to repeat evaluation on the evaluations set. With diffusion
     # samplers the training loss is very noisy so multipple evaluations gives a 
     # better estimate. TODO: reaplce with sampler.elbo(...)
     train.eval_repeats = 20
+    train.use_context = True
+    train.total_steps = 100000
 
     #######################################################################
     ############################# MODEL CONFIG ############################
     #######################################################################
     config.model = model = ConfigDict()
-    # Name of architecture. Currently in ['absorbing_diffusion', 'autoregressive'].
+    # Name of architecture. Currently in ['absorbing', 'autoregressive'].
     model.name = "absorbing"
     # Network width
     model.n_emb = 512
     # Number of attention heads
-    model.n_head = 8
+    model.n_head = 4
     # Number of layers
-    model.n_layers = 24
+    model.n_layers = 8
     # Max input size to initialise positional embeddings etc at
     model.block_size = 1024
     # Dropout params
-    model.attn_pdrop = 0.
-    model.embd_pdrop = 0.
-    model.resid_pdrop = 0.
+    model.attn_pdrop = 0.5
+    model.embd_pdrop = 0.5
+    model.resid_pdrop = 0.5
+    model.load_step = 0
 
     config.diffusion = diffusion = ConfigDict()
     # What loss to use. Choose from ['elbo', 'mlm', 'reweighted_elbo']
@@ -96,7 +103,8 @@ def get_config():
     # Temperature to sample diffusion with
     diffusion.sampling_temp = 0.9
     # Batch size for sampling
-    diffusion.sampling_batch_size = 4
+    diffusion.sampling_batch_size = 1
+    diffusion.flash_attn = True
 
     #######################################################################
     ########################### OPTIMIZER CONFIG ##########################
@@ -104,7 +112,7 @@ def get_config():
     config.optimizer = optimizer = ConfigDict()
     optimizer.learning_rate = 2e-4
     optimizer.warmup_steps = 5000
+    optimizer.weight_decay = 0.1
 
 
     return config
-    

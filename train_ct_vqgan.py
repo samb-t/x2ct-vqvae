@@ -84,7 +84,7 @@ def train(H, vqgan, vqgan_ema, train_loader, test_loader, optim, d_optim, start_
                 update_model_weights(optim, stats['loss'], amp=H.train.amp, scaler=scaler)
 
                 # Merge stats dict
-                stats = stats | d_stats
+                stats.update(d_stats)
             
             else:
                 raise Exception("Unknown option set for 'config.train.gan_training_mode'")
@@ -102,14 +102,14 @@ def train(H, vqgan, vqgan_ema, train_loader, test_loader, optim, d_optim, start_
             ## Plot graphs
             # Averages tracked variables, prints, and graphs on wandb
             if global_step % H.train.plot_graph_steps == 0 and global_step > 0:
-                wandb_dict |= log_stats(H, global_step, tracked_stats, log_to_file=H.run.log_to_file)
+                wandb_dict.update(log_stats(H, global_step, tracked_stats, log_to_file=H.run.log_to_file))
             
             ## Plot recons
             if global_step % H.train.plot_recon_steps == 0 and global_step > 0:
-                wandb_dict |= plot_images(H, x.max(dim=3)[0], title='x max(dim=3)', vis=vis)
-                wandb_dict |= plot_images(H, x.max(dim=4)[0], title='x max(dim=4)', vis=vis)
-                wandb_dict |= plot_images(H, x_hat.max(dim=3)[0], title='x_recon max(dim=3)', vis=vis)
-                wandb_dict |= plot_images(H, x_hat.max(dim=4)[0], title='x_recon max(dim=4)', vis=vis)
+                wandb_dict.update(plot_images(H, x.max(dim=3)[0], title='x max(dim=3)', vis=vis))
+                wandb_dict.update(plot_images(H, x.max(dim=4)[0], title='x max(dim=4)', vis=vis))
+                wandb_dict.update(plot_images(H, x_hat.max(dim=3)[0], title='x_recon max(dim=3)', vis=vis))
+                wandb_dict.update(plot_images(H, x_hat.max(dim=4)[0], title='x_recon max(dim=4)', vis=vis))
             
             ## Evaluate on test set
             if global_step % H.train.eval_steps == 0 and global_step > 0:
@@ -118,11 +118,11 @@ def train(H, vqgan, vqgan_ema, train_loader, test_loader, optim, d_optim, start_
                     with torch.cuda.amp.autocast(enabled=H.train.amp):
                         test_x_hat, test_stats = vqgan.val_iter(test_x, global_step)
                     track_variables(test_tracked_stats, test_stats)
-                wandb_dict |= log_stats(H, global_step, test_tracked_stats, test=True, log_to_file=H.run.log_to_file)
-                wandb_dict |= plot_images(H, test_x.max(dim=3)[0], title='test_x max(dim=3)', vis=vis)
-                wandb_dict |= plot_images(H, test_x.max(dim=4)[0], title='test_x max(dim=4)', vis=vis)
-                wandb_dict |= plot_images(H, test_x_hat.max(dim=3)[0], title='test_x_hat max(dim=3)', vis=vis)
-                wandb_dict |= plot_images(H, test_x_hat.max(dim=4)[0], title='test_x_hat max(dim=4)', vis=vis)
+                wandb_dict.update(log_stats(H, global_step, test_tracked_stats, test=True, log_to_file=H.run.log_to_file))
+                wandb_dict.update(plot_images(H, test_x.max(dim=3)[0], title='test_x max(dim=3)', vis=vis))
+                wandb_dict.update(plot_images(H, test_x.max(dim=4)[0], title='test_x max(dim=4)', vis=vis))
+                wandb_dict.update(plot_images(H, test_x_hat.max(dim=3)[0], title='test_x_hat max(dim=3)', vis=vis))
+                wandb_dict.update(plot_images(H, test_x_hat.max(dim=4)[0], title='test_x_hat max(dim=4)', vis=vis))
             
             ## Plot everything to wandb
             if wandb_dict:
