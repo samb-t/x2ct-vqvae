@@ -18,6 +18,7 @@ This is the official code for the ICCV 2023 paper [Unaligned 2D to 3D Translatio
 - [Setup](#setup)
   - [Set up conda environment](#set-up-conda-environment)
   - [Datasets](#datasets)
+  - [Pre-Trained Models](#pre-trained-models)
 - [Commands](#commands)
   - [Train the VQ-VAEs (Stage 1)](#train-stage-1)
   - [Train an Absorbing Diffusion sampler (Stage 2)](#train-stage-2)
@@ -45,6 +46,9 @@ To train the diffusion model install flash attention from the instructions [here
 We use the publicly available [LIDC-IDRI dataset](https://wiki.cancerimagingarchive.net/pages/viewpage.action?pageId=1966254) and preprocess the CT scans following the instructions in the [X2CT-GAN repo](https://github.com/kylekma/X2CT). We resample the voxel grids into a 128x128x128 resolution with a data type of float16 for fast loading. For the 2D projections we used Plastimatch and followed the instructions in the [MedNeRF repo](https://github.com/abrilcf/mednerf) setting a wider Hounsfield unit range of -1,000 HU to +1,000 HU.
 
 We still have no plans for releasing the baggage security screening data. However this will be considered in the future.
+
+### Pre-Trained Models
+Pre-trained models can be found [here](https://drive.google.com/drive/folders/1VO6h86kevJmGUxpDB908QZdp1rBBlwEB?usp=sharing). To obtain all models, download the logs folder to the root directory of this repo.
 
 
 ### Train Stage 1
